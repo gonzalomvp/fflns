@@ -1,0 +1,95 @@
+diff --git a/engine/openbor.c b/engine/openbor.c
+index 1c1d8937..1659b52e 100644
+--- a/engine/openbor.c
++++ b/engine/openbor.c
+@@ -2411,6 +2411,7 @@ void clearsettings()
+     savedata.uselog = 1;
+     savedata.debuginfo = 0;
+     savedata.fullscreen = 0;
++    savedata.vsync = 1;
+     savedata.stretch = 0;
+ 
+     savedata.swfilter = 0;
+@@ -38004,23 +38005,26 @@ void menu_options_video()
+ 
+         _menutext((selector == 7), col1, 4, Tr("Software Filter:"));
+         _menutext((selector == 7), col2, 4, ((savedata.hwscale >= 2.0 || savedata.fullscreen) ? Tr(GfxBlitterNames[savedata.swfilter]) : Tr("Disabled")));
++        
++        _menutext((selector == 8), col1, 5, Tr("VSync:"));
++        _menutext((selector == 8), col2, 5, savedata.vsync ? "Enabled" : "Disabled");
+ 
+         if(savedata.fullscreen)
+         {
+-            _menutext((selector == 8), col1, 5, Tr("Fullscreen Type:"));
+-            _menutext((selector == 8), col2, 5, (savedata.stretch ? Tr("Stretch to Screen") : Tr("Preserve Aspect Ratio")));
++            _menutext((selector == 9), col1, 6, Tr("Fullscreen Type:"));
++            _menutext((selector == 9), col2, 6, (savedata.stretch ? Tr("Stretch to Screen") : Tr("Preserve Aspect Ratio")));
+         }
+-        else if(selector == 8)
++        else if(selector == 9)
+         {
+-            selector = (bothnewkeys & FLAG_MOVEUP) ? 7 : 9;
++            selector = (bothnewkeys & FLAG_MOVEUP) ? 8 : 10;
+         }
+ 
+-        _menutextm((selector == 9), 7, 0, Tr("Back"));
++        _menutextm((selector == 10), 8, 0, Tr("Back"));
+         if(selector < 0)
+         {
+-            selector = 9;
++            selector = 10;
+         }
+-        if(selector > 9)
++        if(selector > 10)
+         {
+             selector = 0;
+         }
+@@ -38300,6 +38304,10 @@ void menu_options_video()
+ 				video_set_mode(videomodes);
+                 break;
+             case 8:
++                savedata.vsync = !savedata.vsync;
++                video_set_mode(videomodes);
++                break;
++            case 9:
+                 video_stretch((savedata.stretch ^= 1));
+                 break;
+ #endif
+diff --git a/engine/sdl/opengl.c b/engine/sdl/opengl.c
+index 6a308660..c8a54bd6 100644
+--- a/engine/sdl/opengl.c
++++ b/engine/sdl/opengl.c
+@@ -256,7 +256,7 @@ int video_gl_set_mode(s_videomodes videomodes)
+ 	}
+ 
+ 	// try to disable vertical retrace syncing (VSync)
+-	if(SDL_GL_SetSwapInterval(0) < 0)
++	if(SDL_GL_SetSwapInterval(!!savedata.vsync) < 0)
+ 	{
+ 		printf("Warning: can't disable vertical retrace sync (%s)...\n", SDL_GetError());
+ 	}
+diff --git a/engine/sdl/video.c b/engine/sdl/video.c
+index ff4b37e5..5eb6a959 100644
+--- a/engine/sdl/video.c
++++ b/engine/sdl/video.c
+@@ -143,7 +143,7 @@ int SetVideoMode(int w, int h, int bpp, bool gl)
+ 
+ 	if(!gl)
+ 	{
+-		renderer = SDL_CreateRenderer(window, -1, 0);
++		renderer = SDL_CreateRenderer(window, -1, savedata.vsync ? SDL_RENDERER_PRESENTVSYNC : 0);
+ 		if(!renderer)
+ 		{
+ 			printf("Error: failed to create renderer: %s\n", SDL_GetError());
+diff --git a/engine/source/savedata.h b/engine/source/savedata.h
+index 44b78606..6ea3bca2 100644
+--- a/engine/source/savedata.h
++++ b/engine/source/savedata.h
+@@ -43,6 +43,7 @@ typedef struct
+     int fullscreen; // Window or Full Screen Mode
+     int stretch; // Stretch (1) or preserve aspect ratio (0) in fullscreen mode
+     int screen[1][2];
++    int vsync; // Sync to monitor refresh (1) or don't (0)
+ #if SDL
+     int usegl; // 1 if OpenGL is preferred over SDL software blitting
+     float hwscale; // Scale factor for OpenGL

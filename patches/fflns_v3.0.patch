@@ -1,0 +1,5463 @@
+diff --git a/engine/openbor.c b/engine/openbor.c
+index e4b1c667..1c1d8937 100644
+--- a/engine/openbor.c
++++ b/engine/openbor.c
+@@ -34,6 +34,8 @@ s_savedata savedata;
+ //  Global Variables                                                        //
+ /////////////////////////////////////////////////////////////////////////////
+ 
++int finisheds_games_count = 0;
++
+ a_playrecstatus *playrecstatus = NULL;
+ 
+ s_set_entry *levelsets = NULL;
+@@ -1634,11 +1636,11 @@ void execute_onblocko_script(entity *ent, int plane, entity *other)
+         ScriptVariant_ChangeType(&tempvar, VT_PTR);
+         tempvar.ptrVal = (VOID *)ent;
+         Script_Set_Local_Variant(cs, "self",        &tempvar);
+-        ScriptVariant_ChangeType(&tempvar, VT_INTEGER);
++		ScriptVariant_ChangeType(&tempvar, VT_INTEGER);
+         tempvar.lVal = (LONG)plane;
+         Script_Set_Local_Variant(cs, "plane",      &tempvar);
+         ScriptVariant_ChangeType(&tempvar, VT_PTR);
+-        tempvar.ptrVal = (VOID *)other;
++		tempvar.ptrVal = (VOID *)other;
+         Script_Set_Local_Variant(cs, "obstacle",    &tempvar);
+         Script_Execute(cs);
+ 
+@@ -2622,6 +2624,8 @@ int loadGameFile()
+             {
+                 bonus += savelevel[i].times_completed;
+             }
++            //printf("Bonus: %d \n",bonus);
++            finisheds_games_count = bonus; //TAG_YO Cargamos el número de veces que se ha pasado el juego en la variable global finisheds_games_count
+     }
+ 
+     fclose(handle);
+@@ -19231,6 +19235,7 @@ void do_attack(entity *e)
+             new_attack_id = 1;
+         }
+         e->attack_id_outgoing = current_attack_id = new_attack_id;
++	//printf("Attack_id %d \n", new_attack_id); //TAG_YO
+     }
+ 
+ 
+@@ -19319,8 +19324,9 @@ void do_attack(entity *e)
+         }
+ 
+         // Attack IDs must be different.
+-        if(target->attack_id_incoming == current_attack_id && !attack->ignore_attack_id)
++        if((target->attack_id_incoming == current_attack_id || target->attack_id_incoming2 == current_attack_id || target->attack_id_incoming3 == current_attack_id || target->attack_id_incoming4 == current_attack_id ) && !attack->ignore_attack_id)
+         {
++	    //printf("ACA SE INGORA ATAQUE POR TENER EL ID MEMORIZADO: %d - Ignore %d \n",current_attack_id,attack->ignore_attack_id);
+             continue;
+         }
+ 
+@@ -19436,7 +19442,7 @@ void do_attack(entity *e)
+                       inair(self) ||
+                       self->frozen ||
+                       (self->direction == e->direction && self->modeldata.blockback < 1) ||                       // Can't block an attack that is from behind unless blockback flag is enabled
+-                      (!self->idling && self->attacking != ATTACKING_INACTIVE)) &&                                                 // Can't block if busy, attack <0 means the character is preparing to attack, he can block during this time
++                      (!self->idling && self->attacking >= 0)) &&                                                 // Can't block if busy, attack <0 means the character is preparing to attack, he can block during this time
+                     attack->no_block <= self->defense[attack->attack_type].blockpower &&       // If unblockable, will automatically hit
+                     (rand32()&self->modeldata.blockodds) == 1 && // Randomly blocks depending on blockodds (1 : blockodds ratio)
+                     (!self->modeldata.thold || (self->modeldata.thold > 0 && self->modeldata.thold > force)) &&
+@@ -19590,6 +19596,9 @@ void do_attack(entity *e)
+                             self->modeldata.animation[current_follow_id]->attackone = self->animation->attackone;
+                         }
+                         ent_set_anim(self, current_follow_id, 0);
++			self->attack_id_incoming4 = self->attack_id_incoming3;
++			self->attack_id_incoming3 = self->attack_id_incoming2;
++			self->attack_id_incoming2 = self->attack_id_incoming;
+                         self->attack_id_incoming = current_attack_id;
+                     }
+ 
+@@ -19712,7 +19721,10 @@ void do_attack(entity *e)
+                 }
+                 //followed = 1; // quit loop, animation is changed
+             }//end of if #055
+-
++            
++            self->attack_id_incoming4 = self->attack_id_incoming3;
++	    self->attack_id_incoming3 = self->attack_id_incoming2;
++	    self->attack_id_incoming2 = self->attack_id_incoming;
+             self->attack_id_incoming = current_attack_id;
+             if(self == def)
+             {
+@@ -22253,7 +22265,13 @@ int set_riseattack(entity *iRiseattack, int type, int reset)
+     {
+         type = 0;
+     }
+-
++    if( (!validanim(iRiseattack, animriseattacks[type]) ||
++        (iRiseattack->inbackpain && !validanim(iRiseattack, animbackriseattacks[type]) && !validanim(iRiseattack, animriseattacks[type]))) &&
++       iRiseattack->modeldata.riseattacktype == 3 )
++    {
++        return 0;
++    }
++    
+     if ( iRiseattack->inbackpain ) riseattack = animbackriseattacks[type];
+     else riseattack = animriseattacks[type];
+ 
+@@ -22291,6 +22309,7 @@ int set_riseattack(entity *iRiseattack, int type, int reset)
+     iRiseattack->rising = 0;
+     iRiseattack->riseattacking = 1;
+     iRiseattack->drop = 0;
++    iRiseattack->projectile = 0; //TAG_YO, agregado para evitar el bug que cuando el enemigo haga un riseattack siga siendo considerado un proyectil.
+     iRiseattack->nograb = iRiseattack->nograb_default; //iRiseattack->nograb = 0;
+     iRiseattack->modeldata.jugglepoints.current = iRiseattack->modeldata.jugglepoints.max; //reset jugglepoints
+     return 1;
+@@ -24505,7 +24524,7 @@ int common_try_runattack(entity *target)
+ 
+     if(target)
+     {
+-        if(!target->animation->vulnerable[target->animpos] && (target->drop || target->attacking != ATTACKING_INACTIVE))
++        if(!target->animation->vulnerable[target->animpos] && (target->drop || target->attacking))
+         {
+             return 0;
+         }
+@@ -24533,7 +24552,7 @@ int common_try_block(entity *target)
+     }
+ 
+     // no passive block, so block by himself :)
+-    if(target && target->attacking != ATTACKING_INACTIVE)
++    if(target && target->attacking)
+     {
+         self->takeaction = common_block;
+         set_blocking(self);
+@@ -27332,7 +27351,8 @@ int projectile_wall_deflect(entity *ent)
+     #define RICHOCHET_VELOCITY_X_FACTOR 0.25    // This value is multiplied by current velocity to get an X velocity value to bounce off wall..
+     #define RICHOCHET_VELOCITY_Y        2.5     // Base Y velocity applied when projectile bounces off wall.
+     #define RICHOCHET_VELOCITY_Y_RAND   1       // Random seed for Y variance added to base Y velocity when bouncing off wall.
+-
++    //He borrado todo el sistema de rebote para evitar el bug que destruye los misiles cuando se genera una caja de colisión dentro de una plataforma.
++/*
+     float richochet_velocity_x;
+     s_collision_attack attack;
+ 
+@@ -27372,7 +27392,7 @@ int projectile_wall_deflect(entity *ent)
+             return 1;
+         }
+     }
+-
++*/
+     // Did not ricochet, so return false.
+     return 0;
+ 
+@@ -27857,7 +27877,7 @@ int star_move()
+             self->animating = 0;
+         }
+     }
+-
++	
+     return 1;
+ }
+ 
+@@ -34217,7 +34237,7 @@ void apply_controls()
+         control_setkey(playercontrolpointers[p], FLAG_JUMP,       savedata.keys[p][SDID_JUMP]);
+         control_setkey(playercontrolpointers[p], FLAG_SPECIAL,    savedata.keys[p][SDID_SPECIAL]);
+         control_setkey(playercontrolpointers[p], FLAG_START,      savedata.keys[p][SDID_START]);
+-        control_setkey(playercontrolpointers[p], FLAG_SCREENSHOT, savedata.keys[p][SDID_SCREENSHOT]);
++        if (p==0){ control_setkey(playercontrolpointers[p], FLAG_SCREENSHOT, savedata.keys[p][SDID_SCREENSHOT]);}
+     }
+ }
+ 
+@@ -36142,7 +36162,7 @@ int menu_difficulty()
+ {
+     int quit = 0;
+     int selector = 0;
+-    int maxdisplay = 5;
++    int maxdisplay = 9; //TAG_YO cambiado el máximo de opciones que se puedes mostrar de forma simultanea en el menú de selección de modos
+     int i, j, t;
+     //float slider = 0;
+     int barx, bary, barw, barh;
+@@ -36162,7 +36182,7 @@ int menu_difficulty()
+     {
+         if(num_difficulties > 1)
+         {
+-            _menutextm(2, -2, 0, Tr("Game Mode"));
++            _menutextm(2, -5, 0, Tr("Game Mode"));
+             t = (selector - (selector == num_difficulties)) / maxdisplay * maxdisplay;
+             for(j = 0, i = t; i < maxdisplay + t && i < num_difficulties; j++, i++)
+             {
+@@ -36170,17 +36190,17 @@ int menu_difficulty()
+                 {
+                     if(bonus >= levelsets[i].ifcomplete)
+                     {
+-                        _menutextm((selector == i), j, 0, "%s", levelsets[i].name);
++                        _menutextm((selector == i), j-2, 0, "%s", levelsets[i].name);
+                     }
+                     else
+                     {
+                         if(levelsets[i].ifcomplete > 1)
+                         {
+-                            _menutextm((selector == i), j, 0, Tr("%s - Finish Game %i Times To UnLock"), levelsets[i].name, levelsets[i].ifcomplete);
++                            _menutextm((selector == i), j-2, 0, Tr("%s - Finish Game %i Times To UnLock"), levelsets[i].name, levelsets[i].ifcomplete);
+                         }
+                         else
+                         {
+-                            _menutextm((selector == i), j, 0, Tr("%s - Finish Game To UnLock"), levelsets[i].name);
++                            _menutextm((selector == i), j-2, 0, Tr("%s - Finish Game To UnLock"), levelsets[i].name);
+                         }
+                     }
+                 }
+@@ -36189,7 +36209,7 @@ int menu_difficulty()
+                     break;
+                 }
+             }
+-            _menutextm((selector == i), 6, 0, Tr("Back"));
++            _menutextm((selector == i), 8, 0, Tr("Back"));
+ 
+             //draw the scroll bar
+             if(num_difficulties > maxdisplay)
+@@ -36442,7 +36462,7 @@ int choose_mode(int *players)
+ 
+     while(!quit)
+     {
+-        _menutextm(2, 1, 0, Tr("Choose Mode"));
++        _menutextm(2, -5, 0, Tr("Choose Mode"));
+         _menutextm((selector == 0), 3, 0, Tr("New Game"));
+         _menutextm((selector == 1), 4, 0, Tr("Load Game"));
+         _menutextm((selector == 2), 6, 0, Tr("Back"));
+@@ -36934,7 +36954,7 @@ void keyboard_setup(int player)
+     while(!quit)
+     {
+         voffset = -6;
+-        _menutextm(2, -8, 0, Tr("Player %i"), player + 1);
++        _menutextm(2, -5, 0, Tr("Player %i"), player + 1);
+         for(i = 0; i < btnnum; i++)
+         {
+             if(!disabledkey[i])
+@@ -37012,6 +37032,7 @@ void keyboard_setup(int player)
+             if(selector < 0)
+             {
+                 selector = OPTIONS_NUM;
++				//clear_lastjoy();
+             }
+             if(selector > OPTIONS_NUM)
+             {
+@@ -37096,7 +37117,7 @@ void menu_options_input()
+ 
+     while(!quit)
+     {
+-        _menutextm(2, x_pos-1, 0, Tr("Control Options"));
++        _menutextm(2, -5, 0, Tr("Control Options"));
+ 
+         #if PSP
+         if(savedata.usejoy)
+@@ -37537,7 +37558,7 @@ void menu_options_debug()
+     while(!quit)
+     {
+         // Display menu title.
+-        _menutextm(2, MENU_POS_Y, 0, Tr("Debug Settings"));
++        _menutextm(2, -5, 0, Tr("Debug Settings"));
+ 
+         // Menu items.
+         // Y position is controlled by a incremented integer.
+@@ -37709,7 +37730,7 @@ void menu_options_system()
+ 
+     while(!quit)
+     {
+-        _menutextm(2, SYS_OPT_Y_POS-2, 0, Tr("System Options"));
++        _menutextm(2, -5, 0, Tr("System Options"));
+ 
+         _menutext(0, col1, SYS_OPT_Y_POS, Tr("Total RAM:"));
+         _menutext(0, col2, SYS_OPT_Y_POS, Tr("%s KB"), commaprint(getSystemRam(KBYTES)));
+@@ -38333,7 +38354,7 @@ void menu_options()
+ 
+     while(!quit)
+     {
+-        if (!cheats || forcecheatsoff) _menutextm(2, y_offset-1, 0, Tr("Options")); else _menutextm(2, y_offset-1, 0, Tr("Cheat Options"));
++        if (!cheats || forcecheatsoff) _menutextm(2, -5, 0, Tr("Options")); else _menutextm(2, -5, 0, Tr("Cheat Options"));
+ 
+         _menutextm((selector == VIDEO_OPTION), y_offset+VIDEO_OPTION, 0, Tr("Video Options..."));
+         _menutextm((selector == SOUND_OPTION), y_offset+SOUND_OPTION, 0, Tr("Sound Options..."));
+@@ -38548,7 +38569,7 @@ void openborMain(int argc, char **argv)
+     int i;
+     int argl;
+ 
+-    printf("OpenBoR %s, Compile Date: " __DATE__ "\n\n", VERSION);
++    printf("OpenBoR %s Compile Date: " __DATE__ "\n\n", VERSION);
+ 
+     if(argc > 1)
+     {
+@@ -38712,6 +38733,7 @@ void openborMain(int argc, char **argv)
+                     for(i = 0; i < MAX_PLAYERS; i++)
+                     {
+                         players[i] = player[i].newkeys & (FLAG_ANYBUTTON);
++			//printf("Valor i=%d, newkeys=%d\n",i,player[i].newkeys); //TAG_YO
+                     }
+                     relback = choose_mode(players);
+                     if(relback)
+diff --git a/engine/openbor.h b/engine/openbor.h
+index 2a81499c..e255ab2e 100644
+--- a/engine/openbor.h
++++ b/engine/openbor.h
+@@ -111,7 +111,7 @@ movement restirctions are here!
+ #define		GRAB_DIST			36					// Grabbing ents will be placed this far apart.
+ #define		GRAB_STALL			(GAME_SPEED * 8 / 10)
+ #define		T_WALKOFF 			2.0
+-#define		T_MIN_BASEMAP 		-1000
++#define		T_MIN_BASEMAP 		-1000
+ #define     T_MAX_CHECK_ALTITUDE 9999999
+ #define		DEFAULT_ATK_DROPV_Y 3.0
+ #define		DEFAULT_ATK_DROPV_X 1.2
+@@ -154,88 +154,88 @@ typedef struct PlayRecStatus {
+ } a_playrecstatus;
+ 
+ extern a_playrecstatus *playrecstatus;
+-
+-// Caskey, Damon V.
+-// 2018-04-23
+-//
+-// Initial values for projectile spawns.
+-typedef enum
+-{
+-    // Use bitwise ready values here so we can cram
+-    // different types of data into one value.
+-
+-    // Source for projectiles base.
+-    PROJECTILE_PRIME_BASE_FLOOR         = 0x00000001,
+-    PROJECTILE_PRIME_BASE_Y             = 0x00000002,
+-
+-    // Movement behavior on launch.
+-    PROJECTILE_PRIME_LAUNCH_MOVING      = 0x00000004,
+-    PROJECTILE_PRIME_LAUNCH_STATIONARY  = 0x00000008,
+-
+-    // Type of projectile as determined by launch method.
+-    PROJECTILE_PRIME_REQUEST_FLASH      = 0x00000010,
+-    PROJECTILE_PRIME_REQUEST_KNIFE      = 0x00000020,
+-    PROJECTILE_PRIME_REQUEST_PROJECTILE = 0x00000040,
+-    PROJECTILE_PRIME_REQUEST_PSHOTNO    = 0x00000080,
+-    PROJECTILE_PRIME_REQUEST_SHOT       = 0x00000100,
+-    PROJECTILE_PRIME_REQUEST_UNDEFINED  = 0x00000200,   // Probably by a script.
+-
+-
+-    // How was projectile model determined?
+-    PROJECTILE_PRIME_SOURCE_ANIMATION   = 0x00000400,   //  Animation setting.
+-    PROJECTILE_PRIME_SOURCE_GLOBAL      = 0x00000800,   //  Global "knife" or global "shot".
+-    PROJECTILE_PRIME_SOURCE_INDEX       = 0x00001000,   //  By projectile's model index.
+-    PROJECTILE_PRIME_SOURCE_HEADER      = 0x00002000,   //  Model header setting.
+-    PROJECTILE_PRIME_SOURCE_NAME        = 0x00004000,   //  By projectile's model name.
+-    PROJECTILE_PRIME_SOURCE_WEAPON      = 0x00008000    //  From a SUBTYPE_PROJECTLE weapon pickup.
+-} e_projectile_prime;
+-
+-// State of attack boxes.
+-typedef enum
+-{
+-    ATTACKING_INACTIVE,
+-    ATTACKING_PREPARED,
+-    ATTACKING_ACTIVE
+-    // Next should be 4, 8, ... for bitwise evaluations.
+-} e_attacking_state;
+-
+-// State of idle
+-typedef enum
+-{
+-    IDLING_INACTIVE,
+-    IDLING_PREPARED,
+-    IDLING_ACTIVE
+-} e_idling_state;
+-
+-// State of edge.
+-typedef enum
+-{
+-    EDGE_NO,
+-    EDGE_LEFT,
+-    EDGE_RIGHT
+-} e_edge_state;
+-
+-// State of duck.
+-typedef enum
+-{
+-    DUCK_INACTIVE,
+-    DUCK_PREPARED,
+-    DUCK_ACTIVE,
+-    DUCK_RISE = 4
+-} e_duck_state;
+-
+-// Platform props
+-typedef enum
+-{
+-    PLATFORM_X,
+-    PLATFORM_Z,
+-    PLATFORM_UPPERLEFT,
+-    PLATFORM_LOWERLEFT,
+-    PLATFORM_UPPERRIGHT,
+-    PLATFORM_LOWERRIGHT,
+-    PLATFORM_DEPTH,
+-    PLATFORM_HEIGHT
+-} e_platform_props;
++
++// Caskey, Damon V.
++// 2018-04-23
++//
++// Initial values for projectile spawns.
++typedef enum
++{
++    // Use bitwise ready values here so we can cram
++    // different types of data into one value.
++
++    // Source for projectiles base.
++    PROJECTILE_PRIME_BASE_FLOOR         = 0x00000001,
++    PROJECTILE_PRIME_BASE_Y             = 0x00000002,
++
++    // Movement behavior on launch.
++    PROJECTILE_PRIME_LAUNCH_MOVING      = 0x00000004,
++    PROJECTILE_PRIME_LAUNCH_STATIONARY  = 0x00000008,
++
++    // Type of projectile as determined by launch method.
++    PROJECTILE_PRIME_REQUEST_FLASH      = 0x00000010,
++    PROJECTILE_PRIME_REQUEST_KNIFE      = 0x00000020,
++    PROJECTILE_PRIME_REQUEST_PROJECTILE = 0x00000040,
++    PROJECTILE_PRIME_REQUEST_PSHOTNO    = 0x00000080,
++    PROJECTILE_PRIME_REQUEST_SHOT       = 0x00000100,
++    PROJECTILE_PRIME_REQUEST_UNDEFINED  = 0x00000200,   // Probably by a script.
++
++
++    // How was projectile model determined?
++    PROJECTILE_PRIME_SOURCE_ANIMATION   = 0x00000400,   //  Animation setting.
++    PROJECTILE_PRIME_SOURCE_GLOBAL      = 0x00000800,   //  Global "knife" or global "shot".
++    PROJECTILE_PRIME_SOURCE_INDEX       = 0x00001000,   //  By projectile's model index.
++    PROJECTILE_PRIME_SOURCE_HEADER      = 0x00002000,   //  Model header setting.
++    PROJECTILE_PRIME_SOURCE_NAME        = 0x00004000,   //  By projectile's model name.
++    PROJECTILE_PRIME_SOURCE_WEAPON      = 0x00008000    //  From a SUBTYPE_PROJECTLE weapon pickup.
++} e_projectile_prime;
++
++// State of attack boxes.
++typedef enum
++{
++    ATTACKING_INACTIVE,
++    ATTACKING_PREPARED,
++    ATTACKING_ACTIVE
++    // Next should be 4, 8, ... for bitwise evaluations.
++} e_attacking_state;
++
++// State of idle
++typedef enum
++{
++    IDLING_INACTIVE,
++    IDLING_PREPARED,
++    IDLING_ACTIVE
++} e_idling_state;
++
++// State of edge.
++typedef enum
++{
++    EDGE_NO,
++    EDGE_LEFT,
++    EDGE_RIGHT
++} e_edge_state;
++
++// State of duck.
++typedef enum
++{
++    DUCK_INACTIVE,
++    DUCK_PREPARED,
++    DUCK_ACTIVE,
++    DUCK_RISE = 4
++} e_duck_state;
++
++// Platform props
++typedef enum
++{
++    PLATFORM_X,
++    PLATFORM_Z,
++    PLATFORM_UPPERLEFT,
++    PLATFORM_LOWERLEFT,
++    PLATFORM_UPPERRIGHT,
++    PLATFORM_LOWERRIGHT,
++    PLATFORM_DEPTH,
++    PLATFORM_HEIGHT
++} e_platform_props;
+ 
+ typedef enum
+ {
+@@ -250,38 +250,38 @@ typedef enum
+     PORTING_WII,
+     PORTING_WINDOWS,
+     PORTING_WIZ,
+-    PORTING_XBOX,
++    PORTING_XBOX,
+     PORTING_VITA
+ } e_porting;
+-
+-typedef enum
+-{
+-    SPAWN_TYPE_UNDEFINED,
+-    SPAWN_TYPE_BIKER,
+-    SPAWN_TYPE_CMD_SPAWN,
+-    SPAWN_TYPE_CMD_SUMMON,
+-    SPAWN_TYPE_DUST_FALL,
+-    SPAWN_TYPE_DUST_JUMP,
+-    SPAWN_TYPE_DUST_LAND,
+-    SPAWN_TYPE_FLASH,
+-    SPAWN_TYPE_ITEM,
+-    SPAWN_TYPE_LEVEL,
+-    SPAWN_TYPE_PLAYER_MAIN,
+-    SPAWN_TYPE_PLAYER_SELECT,
+-    SPAWN_TYPE_PROJECTILE_BOMB,
+-    SPAWN_TYPE_PROJECTILE_NORMAL,
+-    SPAWN_TYPE_PROJECTILE_STAR,
+-    SPAWN_TYPE_PROJECTILE_BOOMERANG,
+-    SPAWN_TYPE_STEAM,
+-    SPAWN_TYPE_WEAPON
+-} e_spawn_type;
+-
+-typedef enum
+-{
+-    PLANE_X,
+-    PLANE_Y,
+-    PLANE_Z
+-} e_plane;
++
++typedef enum
++{
++    SPAWN_TYPE_UNDEFINED,
++    SPAWN_TYPE_BIKER,
++    SPAWN_TYPE_CMD_SPAWN,
++    SPAWN_TYPE_CMD_SUMMON,
++    SPAWN_TYPE_DUST_FALL,
++    SPAWN_TYPE_DUST_JUMP,
++    SPAWN_TYPE_DUST_LAND,
++    SPAWN_TYPE_FLASH,
++    SPAWN_TYPE_ITEM,
++    SPAWN_TYPE_LEVEL,
++    SPAWN_TYPE_PLAYER_MAIN,
++    SPAWN_TYPE_PLAYER_SELECT,
++    SPAWN_TYPE_PROJECTILE_BOMB,
++    SPAWN_TYPE_PROJECTILE_NORMAL,
++    SPAWN_TYPE_PROJECTILE_STAR,
++    SPAWN_TYPE_PROJECTILE_BOOMERANG,
++    SPAWN_TYPE_STEAM,
++    SPAWN_TYPE_WEAPON
++} e_spawn_type;
++
++typedef enum
++{
++    PLANE_X,
++    PLANE_Y,
++    PLANE_Z
++} e_plane;
+ 
+ typedef struct
+ {
+@@ -311,8 +311,8 @@ typedef enum
+     FLAG_ATTACK2		= 0x00000400,
+     FLAG_ATTACK3		= 0x00000800,
+     FLAG_ATTACK4		= 0x00001000,
+-    FLAG_ANYBUTTON		= (FLAG_START|FLAG_SPECIAL|FLAG_ATTACK|FLAG_ATTACK2|FLAG_ATTACK3|FLAG_ATTACK4|FLAG_JUMP),
+-    FLAG_CONTROLKEYS    = (FLAG_SPECIAL|FLAG_ATTACK|FLAG_ATTACK2|FLAG_ATTACK3|FLAG_ATTACK4|FLAG_JUMP|FLAG_MOVEUP|FLAG_MOVEDOWN|FLAG_MOVELEFT|FLAG_MOVERIGHT),
++    FLAG_ANYBUTTON		= (FLAG_START|FLAG_SPECIAL|FLAG_ATTACK|FLAG_JUMP),
++    FLAG_CONTROLKEYS    = (FLAG_SPECIAL|FLAG_ATTACK|FLAG_JUMP|FLAG_MOVEUP|FLAG_MOVEDOWN|FLAG_MOVELEFT|FLAG_MOVERIGHT),
+     FLAG_FORWARD		= 0x40000000,
+     FLAG_BACKWARD		= 0x80000000
+ } e_key_def;
+@@ -386,12 +386,12 @@ typedef enum
+     SUBTYPE_FOLLOW,     // Used by NPC character, if set, they will try to follow players
+     SUBTYPE_CHASE       // Used by enemy always chasing you
+ } e_entity_type_sub;
+-
+-typedef enum
+-{
+-    EXCHANGE_CONFERRER,
+-    EXCHANGE_RECIPIANT
+-} e_exchange;
++
++typedef enum
++{
++    EXCHANGE_CONFERRER,
++    EXCHANGE_RECIPIANT
++} e_exchange;
+ 
+ //------------reserved for A.I. types-------------------------
+ typedef enum
+@@ -665,15 +665,15 @@ typedef enum //Animations
+     ANI_BACKDIE8,
+     ANI_BACKDIE9,
+     ANI_BACKDIE10,
+-    ANI_BACKRUN,
+-    ANI_BACKBURNPAIN,
+-    ANI_BACKSHOCKPAIN,
+-    ANI_BACKBURN,
+-    ANI_BACKSHOCK,
+-    ANI_BACKBURNDIE,
+-    ANI_BACKSHOCKDIE,
+-    ANI_BACKRISEB,
+-    ANI_BACKRISES,
++    ANI_BACKRUN,
++    ANI_BACKBURNPAIN,
++    ANI_BACKSHOCKPAIN,
++    ANI_BACKBURN,
++    ANI_BACKSHOCK,
++    ANI_BACKBURNDIE,
++    ANI_BACKSHOCKDIE,
++    ANI_BACKRISEB,
++    ANI_BACKRISES,
+     ANI_BACKRISE,
+     ANI_BACKRISE2,
+     ANI_BACKRISE3,
+@@ -683,9 +683,9 @@ typedef enum //Animations
+     ANI_BACKRISE7,
+     ANI_BACKRISE8,
+     ANI_BACKRISE9,
+-    ANI_BACKRISE10,
+-    ANI_BACKRISEATTACKB,
+-    ANI_BACKRISEATTACKS,
++    ANI_BACKRISE10,
++    ANI_BACKRISEATTACKB,
++    ANI_BACKRISEATTACKS,
+     ANI_BACKRISEATTACK,
+     ANI_BACKRISEATTACK2,
+     ANI_BACKRISEATTACK3,
+@@ -695,9 +695,9 @@ typedef enum //Animations
+     ANI_BACKRISEATTACK7,
+     ANI_BACKRISEATTACK8,
+     ANI_BACKRISEATTACK9,
+-    ANI_BACKRISEATTACK10,
+-    ANI_BACKBLOCKPAINB,
+-    ANI_BACKBLOCKPAINS,
++    ANI_BACKRISEATTACK10,
++    ANI_BACKBLOCKPAINB,
++    ANI_BACKBLOCKPAINS,
+     ANI_BACKBLOCKPAIN,
+     ANI_BACKBLOCKPAIN2,
+     ANI_BACKBLOCKPAIN3,
+@@ -709,13 +709,13 @@ typedef enum //Animations
+     ANI_BACKBLOCKPAIN9,
+     ANI_BACKBLOCKPAIN10,
+     ANI_GETBOOMERANG,
+-    ANI_GETBOOMERANGINAIR,
+-    ANI_EDGE,
+-    ANI_BACKEDGE,
+-    ANI_DUCKING,
+-    ANI_DUCKRISE,
+-    ANI_VICTORY,
+-    ANI_FALLLOSE,
++    ANI_GETBOOMERANGINAIR,
++    ANI_EDGE,
++    ANI_BACKEDGE,
++    ANI_DUCKING,
++    ANI_DUCKRISE,
++    ANI_VICTORY,
++    ANI_FALLLOSE,
+     ANI_LOSE,
+     MAX_ANIS                // Maximum # of animations. This must always be last.
+ } e_animations;
+@@ -797,7 +797,7 @@ typedef enum
+     LEVEL_PROP_BOSS_SLOW,                       // int boss_slow;
+     LEVEL_PROP_CAMERA_OFFSET_X,                 // int cameraxoffset;
+     LEVEL_PROP_CAMERA_OFFSET_Z,                 // int camerazoffset;
+-    LEVEL_PROP_COMPLETE_FORCE,                  // int force_finishlevel;
++    LEVEL_PROP_COMPLETE_FORCE,                  // int force_finishlevel;
+     LEVEL_PROP_GAMEOVER,                        // int force_gameover;
+     LEVEL_PROP_DAMAGE_FROM_ENEMY,               // int nohurt;
+     LEVEL_PROP_DAMAGE_FROM_PLAYER,              // int nohit;
+@@ -825,7 +825,7 @@ typedef enum
+     LEVEL_PROP_MAX_FALL_VELOCITY,               // float maxfallspeed;
+     LEVEL_PROP_MAX_TOSS_VELOCITY,               // float maxtossspeed;
+     LEVEL_PROP_MIRROR,                          // int mirror;
+-    LEVEL_PROP_NAME,                            // char *name;
++    LEVEL_PROP_NAME,                            // char *name;
+     LEVEL_PROP_NUM_BOSSES,                      // int numbosses;
+     LEVEL_PROP_PALETTE_BLENDING_COLLECTION,     // unsigned char *(*blendings)[MAX_BLENDINGS];
+     LEVEL_PROP_PALETTE_COLLECTION,              // unsigned char (*palettes)[1024];
+@@ -920,7 +920,7 @@ typedef enum
+     ATK_ITEM,
+     ATK_LAND,
+     ATK_PIT,
+-    ATK_LIFESPAN,
++    ATK_LIFESPAN,
+     ATK_LOSE,
+     ATK_TIMEOVER,
+     MAX_ATKS,                       //Default max attack types (must be below all attack types in enum to get correct value)
+@@ -1357,22 +1357,22 @@ if(n<1) n = 1;
+ 						 e->idling = IDLING_INACTIVE;
+ 
+ #define set_jumping(e)   e->jumping = 1;\
+-						 e->idling = IDLING_INACTIVE; \
++						 e->idling = IDLING_INACTIVE; \
+ 						 e->ducking = DUCK_INACTIVE;
+ 
+ #define set_charging(e)  e->charging = 1;\
+-						 e->idling = IDLING_INACTIVE; \
++						 e->idling = IDLING_INACTIVE; \
+ 						 e->ducking = DUCK_INACTIVE;
+ 
+ #define set_getting(e)   e->getting = 1;\
+-						 e->idling = IDLING_INACTIVE; \
++						 e->idling = IDLING_INACTIVE; \
+ 						 e->ducking = DUCK_INACTIVE;
+ 
+ #define set_blocking(e)  e->blocking = 1;\
+ 						 e->idling = IDLING_INACTIVE;
+ 
+ #define set_turning(e)  e->turning = 1;\
+-						e->idling = IDLING_INACTIVE; \
++						e->idling = IDLING_INACTIVE; \
+ 						 e->ducking = DUCK_INACTIVE;
+ 
+ #define expand_time(e)   if(e->stalltime>0) e->stalltime++;\
+@@ -1429,19 +1429,19 @@ if(n<1) n = 1;
+ //#define     MAX_MOVE_STEPS        16
+ 
+ #pragma pack(4)
+-
++
+ // Caskey, Damon V.
+-// 2014-01-20
++// 2014-01-20
+ //
+ // Axis - Horizontal and lateral only (float).
+ typedef struct
+ {
+     float x;    // Horizontal axis.
+     float z;    // Lateral axis.
+-} s_axis_plane_lateral_float;
+-
++} s_axis_plane_lateral_float;
++
+ // Caskey, Damon V.
+-// 2014-01-20
++// 2014-01-20
+ //
+ // Axis - Horizontal and lateral only (int).
+ typedef struct
+@@ -1449,58 +1449,58 @@ typedef struct
+     int x;    // Horizontal axis.
+     int z;    // Lateral axis.
+ } s_axis_plane_lateral_int;
+-
++
+ // Caskey, Damon V.
+-// 2014-01-20
++// 2014-01-20
+ //
+ // Axis - Horizontal and vertical only (int).
+ typedef struct
+ {
+     int x;      // Horizontal axis.
+     int y;      // Altitude/Vertical axis.
+-} s_axis_plane_vertical_int;
+-
+-// Caskey, Damon V.
+-// 2018-04-18
+-//
+-// Axis - 3D float.
+-typedef struct
+-{
+-    float x;
+-    float y;
+-    float z;
+-} s_axis_principal_float;
+-
+-// Caskey, Damon V.
+-// 2018-04-18
+-//
+-// Axis - 3D int.
+-typedef struct
+-{
+-    int x;
+-    int y;
+-    int z;
+-} s_axis_principal_int;
+-
+-typedef struct
+-{
+-    s_axis_principal_int    axis;
+-    int                     base;
+-} s_move;
+-
+-// boomerang props
+-typedef struct
+-{
+-    float acceleration;
+-    float hdistance;
+-} s_boomerang_props;
+-
+-// distance x and z for edge animation
+-typedef struct
+-{
+-    float x;
+-    float z;
+-} s_edge_range;
++} s_axis_plane_vertical_int;
++
++// Caskey, Damon V.
++// 2018-04-18
++//
++// Axis - 3D float.
++typedef struct
++{
++    float x;
++    float y;
++    float z;
++} s_axis_principal_float;
++
++// Caskey, Damon V.
++// 2018-04-18
++//
++// Axis - 3D int.
++typedef struct
++{
++    int x;
++    int y;
++    int z;
++} s_axis_principal_int;
++
++typedef struct
++{
++    s_axis_principal_int    axis;
++    int                     base;
++} s_move;
++
++// boomerang props
++typedef struct
++{
++    float acceleration;
++    float hdistance;
++} s_boomerang_props;
++
++// distance x and z for edge animation
++typedef struct
++{
++    float x;
++    float z;
++} s_edge_range;
+ 
+ typedef struct
+ {
+@@ -1621,17 +1621,17 @@ typedef struct
+     float       factor;         // basic defense factors: damage = damage*defense
+     float       knockdown;      // Knockdowncount (like knockdowncount) for attack type.
+     float       pain;           // Pain factor (like nopain) for defense type.
+-} s_defense;
+-
+-// Caskey, Damon V.
+-// 2018-04-10
+-//
+-// Causing damage when an entity lands from
+-// a fall.
+-typedef struct
+-{
+-    int attack_force;
+-    e_attack_types attack_type;
++} s_defense;
++
++// Caskey, Damon V.
++// 2018-04-10
++//
++// Causing damage when an entity lands from
++// a fall.
++typedef struct
++{
++    int attack_force;
++    e_attack_types attack_type;
+ } s_damage_on_landing;
+ 
+ // Caskey, Damon V.
+@@ -1660,23 +1660,23 @@ typedef struct
+ // Collision box for active
+ // attacks.
+ typedef struct
+-{
+-    bool                blast;              // Attack box active on hit opponent's fall animation.
+-    bool                steal;              // Add damage to owner's hp.
+-    bool                ignore_attack_id;   // Ignore attack ID to attack in every frame
++{
++    bool                blast;              // Attack box active on hit opponent's fall animation.
++    bool                steal;              // Add damage to owner's hp.
++    bool                ignore_attack_id;   // Ignore attack ID to attack in every frame
+     bool                no_flash;           // Flag to determine if an attack spawns a flash or not
+     bool                no_kill;            // this attack won't kill target (leave 1 HP)
+-    bool                no_pain;            // No animation reaction on hit.
+-    int                 attack_drop;        // now be a knock-down factor, how many this attack will knock victim down
+-    int                 attack_type;        // Reaction animation, death, etc.
+-    int                 counterattack;      // Treat other attack boxes as body box.
+-    int                 freeze;             // Lock target in place and set freeze time.
+-    int                 jugglecost;         // cost for juggling a falling ent
+-    int                 no_block;           // If this is greater than defense block power, make the hit
+-    int                 pause_add;          // Flag to determine if an attack adds a pause before updating the animation
+-    int                 seal;               // Disable target's animations with energycost > seal.
+-    e_otg               otg;                // Over The Ground. Gives ground projectiles the ability to hit lying ents.
+-    e_direction_adjust  force_direction;    // Adjust target's direction on hit.
++    bool                no_pain;            // No animation reaction on hit.
++    int                 attack_drop;        // now be a knock-down factor, how many this attack will knock victim down
++    int                 attack_type;        // Reaction animation, death, etc.
++    int                 counterattack;      // Treat other attack boxes as body box.
++    int                 freeze;             // Lock target in place and set freeze time.
++    int                 jugglecost;         // cost for juggling a falling ent
++    int                 no_block;           // If this is greater than defense block power, make the hit
++    int                 pause_add;          // Flag to determine if an attack adds a pause before updating the animation
++    int                 seal;               // Disable target's animations with energycost > seal.
++    e_otg               otg;                // Over The Ground. Gives ground projectiles the ability to hit lying ents.
++    e_direction_adjust  force_direction;    // Adjust target's direction on hit.
+     int                 attack_force;       // Hit point damage attack inflicts.
+     int                 blockflash;         // Custom bflash for each animation, model id
+     int                 blocksound;         // Custom sound for when an attack is blocked
+@@ -1690,11 +1690,11 @@ typedef struct
+     unsigned int        maptime;            // Time for forcemap to remain in effect.
+     unsigned int        pain_time;          // pain invincible time
+     unsigned int        sealtime;           // Time for seal to remain in effect.
+-    int                 tag;                // User defined tag for scripts. No hard coded purpose.
+-    int                 grab_distance;      // Distance used by "grab".
+-    s_axis_principal_float            dropv;              // Velocity of target if knocked down.
+-    s_damage_on_landing damage_on_landing;  // Cause damage when target entity lands from fall.
+-    s_staydown          staydown;           // Modify victum's stayodwn properties.
++    int                 tag;                // User defined tag for scripts. No hard coded purpose.
++    int                 grab_distance;      // Distance used by "grab".
++    s_axis_principal_float            dropv;              // Velocity of target if knocked down.
++    s_damage_on_landing damage_on_landing;  // Cause damage when target entity lands from fall.
++    s_staydown          staydown;           // Modify victum's stayodwn properties.
+     s_damage_recursive  *recursive;         // Set up recursive damage (dot) on hit.
+     s_hitbox            *coords;            // Collision detection coordinates.
+ } s_collision_attack;
+@@ -1716,7 +1716,7 @@ typedef struct
+ typedef struct
+ {
+     int                 confirm;    // Will engine's default hit handling be used?
+-    s_axis_principal_float            position;   // X,Y,Z of last hit.
++    s_axis_principal_float            position;   // X,Y,Z of last hit.
+     s_collision_attack  *attack;    // Collision attacking box.
+     s_collision_body    *body;      // Collision detect box.
+ } s_lasthit;
+@@ -1746,27 +1746,27 @@ typedef struct
+     int disable;        //Disable flag. See check_energy function.
+     e_cost_type mponly; //MPonly type. 0 = MP while available, then HP. 1 = MP only. 2 = HP only.
+ } s_energycost;
+-
+-// Caskey, Damon V.
+-// 2011-04-01
+-//
+-// On frame movement (slide, jump, dive, etc.).
++
++// Caskey, Damon V.
++// 2011-04-01
++//
++// On frame movement (slide, jump, dive, etc.).
+ typedef struct
+ {
+-    unsigned int  frame;      // Frame to perform action.
++    unsigned int  frame;      // Frame to perform action.
+     int                 ent;        // Index of entity to spawn.
+     s_axis_principal_float            velocity;   // x,a,z velocity.
+ } s_onframe_move;
+-
+-// Caskey, Damon V.
+-// 2018-04-20
+-//
+-// On frame action, where no movement is needed. (Landing, starting to fall...).
++
++// Caskey, Damon V.
++// 2018-04-20
++//
++// On frame action, where no movement is needed. (Landing, starting to fall...).
+ typedef struct
+ {
+-    unsigned int  frame;  // Frame to perform action.
++    unsigned int  frame;  // Frame to perform action.
+     int         ent;        // Index of entity to spawn.
+-} s_onframe_set;
++} s_onframe_set;
+ 
+ typedef struct
+ {
+@@ -1787,18 +1787,18 @@ typedef struct //2011_04_01, DC: Frame based screen shake functionality.
+     int repeat;     //Repetitons.
+     int v;          //Vertical distance of screen movement (in pixels).
+ } s_quakeframe;
+-
+-// Caskey, Damon V.
+-//
+-// Distance to target verification for AI running, jumping,
+-// following parent, and combo chains for all entity types.
++
++// Caskey, Damon V.
++//
++// Distance to target verification for AI running, jumping,
++// following parent, and combo chains for all entity types.
+ typedef struct
+-{
+-    s_metric_range base;
+-    s_metric_range x;
+-    s_metric_range y;
++{
++    s_metric_range base;
++    s_metric_range x;
++    s_metric_range y;
+     s_metric_range z;
+-} s_range;
++} s_range;
+ 
+ typedef struct
+ {
+@@ -1820,17 +1820,17 @@ typedef struct
+     Damon V. caskey
+     2014-01-04
+     */
+-
+-    unsigned int animation;   // Follow animation to perform.
++
++    unsigned int animation;   // Follow animation to perform.
+     e_follow_condition condition;   // Condition in which follow up will be performed.
+-} s_follow;
+-
+-// Caskey, Damon V.
+-// 2014-01-18
+-//
++} s_follow;
++
++// Caskey, Damon V.
++// 2014-01-18
++//
+ // Projectile spawning.
+ typedef struct
+-{
++{
+     unsigned int      shootframe;
+     unsigned int      throwframe;
+     unsigned int      tossframe;  // Frame to toss bomb/grenade
+@@ -1838,32 +1838,32 @@ typedef struct
+     int                     flash;      // custpshotno;
+     int                     knife;      // custknife;
+     s_axis_principal_int  position;   // Location at which projectiles are spawned
+-    int                     star;       // custstar;
++    int                     star;       // custstar;
+     int                     boomerang;       // custboomerang;
+-} s_projectile;
++} s_projectile;
+ 
+ typedef struct
+ {
+-    bool                    antigrav;               // This animation ignores gravity.
++    bool                    antigrav;               // This animation ignores gravity.
+     int                     animhits;               // How many consecutive hits have been made? Used for canceling.
+     unsigned int            chargetime;             // charge time for an animation
+     int                     flipframe;              // Turns entities around on the desired frame
+-    int                     numframes;              // Count of frames in the animation.
+-    int                     unsummonframe;          // Un-summon the entity
+-    bool                    attackone;              // Attack hits only one target.
+-    int                     cancel;                 // Cancel anims with freespecial
++    int                     numframes;              // Count of frames in the animation.
++    int                     unsummonframe;          // Un-summon the entity
++    bool                    attackone;              // Attack hits only one target.
++    int                     cancel;                 // Cancel anims with freespecial
+     int                     index;                  // unique id
+     int                     model_index;
+-    int                     subentity;              // Store the sub-entity's name for further use
+-    int                     sync;                   // Synchronize frame to previous animation if they matches
+-    float                   bounce;                 // -tossv/bounce = new tossv
+-    s_follow                followup;               // Subsequent animation on hit.
+-    s_loop                  loop;                   // Animation looping. 2011_03_31, DC: Moved to struct.
++    int                     subentity;              // Store the sub-entity's name for further use
++    int                     sync;                   // Synchronize frame to previous animation if they matches
++    float                   bounce;                 // -tossv/bounce = new tossv
++    s_follow                followup;               // Subsequent animation on hit.
++    s_loop                  loop;                   // Animation looping. 2011_03_31, DC: Moved to struct.
+     s_projectile            projectile;             // Subentity spawn for knives, stars, bombs, hadoken, etc.
+     s_quakeframe            quakeframe;             // Screen shake effect. 2011_04_01, DC; Moved to struct.
+-    s_range                 range;                  // Verify distance to target, jump landings, etc.. 2011_04_01, DC: Moved to struct.
+-    s_axis_principal_int                size;                   // Dimensions (height, width).
+-    unsigned                *idle;                  // Allow free move
++    s_range                 range;                  // Verify distance to target, jump landings, etc.. 2011_04_01, DC: Moved to struct.
++    s_axis_principal_int                size;                   // Dimensions (height, width).
++    unsigned                *idle;                  // Allow free move
+     int                     *delay;
+     float                   (*platform)[8];         // Now entities can have others land on them
+     int                     *shadow;
+@@ -1877,14 +1877,14 @@ typedef struct
+     int                     *weaponframe;           // Specify with a frame when to switch to a weapon model
+     s_collision_attack_list **collision_attack;
+     s_collision_body_list   **collision_body;
+-    s_counterrange          *counterrange;           // Auto counter attack. 2011_04_01, DC: Moved to struct.
++    s_counterrange          *counterrange;           // Auto counter attack. 2011_04_01, DC: Moved to struct.
+     s_drawmethod            **drawmethods;
+     s_onframe_set           *dropframe;             // if tossv < 0, this frame will be set
+-    s_onframe_move          *jumpframe;              // Jumpframe action. 2011_04_01, DC: moved to struct.
+-    s_onframe_set           *landframe;             // Landing behavior.
+-    s_energycost            *energycost;            // 1-10-05 to adjust the amount of energy used for specials. 2011_03_31, DC: Moved to struct.
++    s_onframe_move          *jumpframe;              // Jumpframe action. 2011_04_01, DC: moved to struct.
++    s_onframe_set           *landframe;             // Landing behavior.
++    s_energycost            *energycost;            // 1-10-05 to adjust the amount of energy used for specials. 2011_03_31, DC: Moved to struct.
+     s_move                  **move;                 // base = seta, x = move, y = movea, z = movez
+-    s_axis_plane_vertical_int   **offset;               // original sprite offsets
++    s_axis_plane_vertical_int   **offset;               // original sprite offsets
+ } s_anim;
+ 
+ struct animlist
+@@ -2111,8 +2111,8 @@ typedef struct
+     int knife; // 7-1-2005 now every enemy can have their own "knife" projectile
+     int pshotno; // 7-1-2005 now every enemy can have their own "knife" projectile
+     int star; // 7-1-2005 now every enemy can have their own "ninja star" projectiles
+-    int bomb; // New projectile type for exploding bombs/grenades/dynamite
+-    int boomerang;
++    int bomb; // New projectile type for exploding bombs/grenades/dynamite
++    int boomerang;
+     s_boomerang_props boomerang_prop;
+     int flash; // Now each entity can have their own flash
+     int bflash; // Flash that plays when an attack is blocked
+@@ -2170,7 +2170,7 @@ typedef struct
+     float knockdowncount; // the knock down count for this entity
+     float attackthrottle; // how often the enemy refuse to attack
+     float attackthrottletime; // how long does the throttle status last
+-    s_stealth stealth; // Invisibility to AI feature added by DC. 2011_04_05, DC: Moved to struct.
++    s_stealth stealth; // Invisibility to AI feature added by DC. 2011_04_05, DC: Moved to struct.
+     s_edge_range edgerange; // Edge range
+ 
+     //---------------new A.I. switches-----------
+@@ -2229,32 +2229,32 @@ typedef struct
+     int selectable;
+ } s_modelcache;
+ s_modelcache *model_cache;
+-
+-// Caskey, Damon V.
+-// 2013-12-08
+-//
++
++// Caskey, Damon V.
++// 2013-12-08
++//
+ // Jumping action setup.
+ typedef struct
+ {
+     e_animations    animation_id;   // Jumping Animation.
+     s_axis_principal_float        velocity;       // x,a,z velocity setting.
+ } s_jump;
+-
+-
+-// Caskey, Damon V.
+-// 2013-12-17
+-//
+-// Binding struct. Control linking
+-// of entity to a target entity.
++
++
++// Caskey, Damon V.
++// 2013-12-17
++//
++// Binding struct. Control linking
++// of entity to a target entity.
+ typedef struct
+ {
+-    unsigned int      ani_bind;       // Animation binding type.
+-    int               sortid;         // Relative binding sortid. Default = -1
+-    s_axis_principal_int bind_toggle;    // Toggle binding on X, Y and Z axis.
++    unsigned int      ani_bind;       // Animation binding type.
++    int               sortid;         // Relative binding sortid. Default = -1
++    s_axis_principal_int bind_toggle;    // Toggle binding on X, Y and Z axis.
+     s_axis_principal_int  offset;         // x,y,z offset.
+-    e_direction_adjust      direction;      // Direction force
++    e_direction_adjust      direction;      // Direction force
+     struct entity *ent;                     // Entity to bind.
+-} s_bind;
++} s_bind;
+ 
+ typedef struct
+ {
+@@ -2267,31 +2267,31 @@ typedef struct
+     s_metric_range_current count;   //Hits counter.
+     u32 time;           //Time to perform combo.
+ } s_rush;
+-
+-typedef struct
+-{
+-    int health_current;
+-    int health_old;
+-    int mp_current;
+-    int mp_old;
+-} s_energy_status;
+-
+-// Caskey, Damon V.
+-// 2018-04-25
+-//
+-// Entity item values. Encapsulates properties
+-// entity uses for item pickups.
+-typedef struct
+-{
+-    int alpha;                      // int itemmap alpha effect of item
++
++typedef struct
++{
++    int health_current;
++    int health_old;
++    int mp_current;
++    int mp_old;
++} s_energy_status;
++
++// Caskey, Damon V.
++// 2018-04-25
++//
++// Entity item values. Encapsulates properties
++// entity uses for item pickups.
++typedef struct
++{
++    int alpha;                      // int itemmap alpha effect of item
+     int colorset;                   // int itemmap; // Now items spawned can have their properties changed
+-    int health;                     // int itemhealth; // Now items spawned can have their properties changed
++    int health;                     // int itemhealth; // Now items spawned can have their properties changed
+     int index;                      // int itemindex; // item model index
+-    int player_count;               // int itemplayer_count;
+-    char alias[MAX_NAME_LEN];   // char itemalias[MAX_NAME_LEN]; // Now items spawned can have their properties changed
+-} s_item_properties;
+-
+-
++    int player_count;               // int itemplayer_count;
++    char alias[MAX_NAME_LEN];   // char itemalias[MAX_NAME_LEN]; // Now items spawned can have their properties changed
++} s_item_properties;
++
++
+ typedef struct entity
+ {
+     e_spawn_type        spawntype;              // Type of spawn (level spawn, script spawn, ...)
+@@ -2299,12 +2299,12 @@ typedef struct entity
+     bool                deduct_ammo;            // Check for ammo count?
+     e_projectile_prime  projectile_prime;       // If this entity is a projectile, several priming values go here to set up its behavior.
+     int                 playerindex;            // Player controlling the entity.
+-    s_energy_status     energy_status;          // Health and MP.
++    s_energy_status     energy_status;          // Health and MP.
+     char                name[MAX_NAME_LEN]; // this is display name
+     s_model             *defaultmodel;          // this is the default model
+     s_model             *model;                 // current model
+-    s_model             modeldata;              // model data copied here
+-    s_item_properties   *item_properties;       // Properties copied to an item entity when it is dropped.
++    s_model             modeldata;              // model data copied here
++    s_item_properties   *item_properties;       // Properties copied to an item entity when it is dropped.
+     bool boss;
+     unsigned int dying;   // Corresponds with which remap is to be used for the dying flash
+     unsigned int dying2;  // Corresponds with which remap is to be used for the dying flash for per2
+@@ -2377,13 +2377,13 @@ typedef struct entity
+     bool charging;
+     unsigned int blocking;
+     int falling;
+-    int running; // Flag to determine if a player is running
++    int running; // Flag to determine if a player is running
+     int ducking; // in duck stance
+     int grabwalking; // a flag for grabwalk check
+     int inpain; // playing pain animation
+-    int inbackpain; // playing back pain/fall/rise/riseattack/die animation
+-    int rising; // playing rise animation
+-    int riseattacking; // playing rise attack animation
++    int inbackpain; // playing back pain/fall/rise/riseattack/die animation
++    int rising; // playing rise animation
++    int riseattacking; // playing rise attack animation
+     int edge; // in edge (unbalanced)
+     int normaldamageflipdir; // used to reset backpain direction
+     int frozen; // Flag to determine if an entity is frozen
+@@ -2401,11 +2401,11 @@ typedef struct entity
+     s_axis_principal_float *waypoints;
+     int numwaypoints;
+     unsigned int animpos; // Current animation frame.
+-    unsigned int animnum; // animation id.
++    unsigned int animnum; // animation id.
+     unsigned int prevanimnum; // previous animation id.
+     s_anim *animation;
+-    float knockdowncount;
+-    s_damage_on_landing damage_on_landing;
++    float knockdowncount;
++    s_damage_on_landing damage_on_landing;
+     int die_on_landing; // flag for damageonlanding (active if self->health <= 0)
+     int last_damage_type; // used for set death animation or pain animation
+     int map; // Stores the colourmap for restoring purposes
+@@ -2413,7 +2413,10 @@ typedef struct entity
+     void (*takeaction)();
+     int (*takedamage)(struct entity *, s_collision_attack *, int);
+     int (*trymove)(float, float);
+-    unsigned int attack_id_incoming;
++    unsigned int attack_id_incoming;
++    unsigned int attack_id_incoming2; //Variables agregas para memorizar las últimas 4 cajas de impactos y evitar el bug del "chorricombo"
++    unsigned int attack_id_incoming3;
++    unsigned int attack_id_incoming4;
+     unsigned int attack_id_outgoing;
+     int hitwall; // == 1 in the instant that hit the wall/platform/obstacle, else == 0
+     unsigned char *colourmap;
+@@ -2469,7 +2472,7 @@ typedef struct
+     int spawnmp;
+     int joining;
+     int hasplayed;
+-    int weapnum;
++    int weapnum;
+     int status;
+ } s_player;
+ 
+@@ -2507,7 +2510,7 @@ typedef struct
+     unsigned per2; // Used to store at what health value the entity flashes more rapidly
+     int nolife; // So nolife can be overriden for all characters
+     s_item_properties item_properties; // Alias, health, index, etc. for items.
+-    char *item; // must be a name in the model list, so just reference
++    char *item; // must be a name in the model list, so just reference
+     s_model *itemmodel;
+     s_model *model;
+     char alias[MAX_NAME_LEN];
+@@ -2620,7 +2623,7 @@ typedef struct
+     float upperleft;
+     float upperright;
+     float x;
+-    float z;
++    float z;
+     int type;
+ } s_terrain;
+ 
+@@ -2668,7 +2671,7 @@ typedef struct
+     float scrollspeed; // UT: restore this command  2011/7/8
+     int bgdir; // Used to set which direction the backgrounds scroll for autoscrolling backgrounds
+     int mirror;
+-    int bossescount;
++    int bossescount;
+     int numbosses;
+     char bossmusic[MAX_BUFFER_LEN];
+     unsigned bossmusic_offset;
+@@ -2683,7 +2686,7 @@ typedef struct
+     int nohurt; // Used to specify if you can hurt the other player during bonus levels
+     int boss_slow; // Flag so the level doesn't slow down after a boss is defeated
+     int nohit; // Not able to grab / hit other player on a per level basis
+-    int force_finishlevel; // flag to force to finish a level
++    int force_finishlevel; // flag to force to finish a level
+     int force_gameover; // flag to force game over
+     s_axis_principal_float *spawn; // Used to determine the spawn position of players
+     int setweap; // Levels can now specified which weapon will be used by default
+@@ -2711,8 +2714,8 @@ typedef struct ArgList
+     size_t count;
+     size_t arglen[MAX_ARG_COUNT];
+     char *args[MAX_ARG_COUNT];
+-} ArgList;
+-
++} ArgList;
++
+ #pragma pack()
+ 
+ 
+@@ -2725,9 +2728,9 @@ typedef struct ArgList
+ #define GET_INT_ARGP(z) getValidInt(GET_ARGP(z), filename, command)
+ #define GET_FLOAT_ARGP(z) getValidFloat(GET_ARGP(z), filename, command)
+ 
+-#define GET_FRAME_ARG(z) (stricmp(GET_ARG(z), "this")==0?newanim->numframes:GET_INT_ARG(z))
+-
+-int is_frozen(entity *e);
++#define GET_FRAME_ARG(z) (stricmp(GET_ARG(z), "this")==0?newanim->numframes:GET_INT_ARG(z))
++
++int is_frozen(entity *e);
+ void unfrozen(entity *e);
+ int     buffer_pakfile(char *filename, char **pbuffer, size_t *psize);
+ size_t  ParseArgs(ArgList *list, char *input, char *output);
+@@ -2757,7 +2760,7 @@ void    execute_ondoattack_script   (entity *ent, entity *other, s_collision_att
+ void    execute_updateentity_script (entity *ent);
+ void    execute_think_script        (entity *ent);
+ void    execute_didhit_script       (entity *ent, entity *other, s_collision_attack *attack, int blocked);
+-void    execute_onspawn_script      (entity *ent);
++void    execute_onspawn_script      (entity *ent);
+ void    clearbuttonss(int player);
+ void    clearsettings(void);
+ void    savesettings(void);
+@@ -2853,9 +2856,9 @@ void drawstatus();
+ void addscore(int playerindex, int add);
+ void free_ent(entity *e);
+ void free_ents();
+-int alloc_ents();
++int alloc_ents();
+ int is_walking(int iAni);
+-entity *smartspawn(s_spawn_entry *p);
++entity *smartspawn(s_spawn_entry *p);
+ void initialize_item_carry(entity *ent, s_spawn_entry *spawn_entry);
+ int adjust_grabposition(entity *ent, entity *other, float dist, int grabin);
+ int player_trymove(float xdir, float zdir);
+@@ -2875,14 +2878,14 @@ int biker_takedamage(entity *other, s_collision_attack *attack, int);
+ int obstacle_takedamage(entity *other, s_collision_attack *attack, int);
+ void suicide(void);
+ void player_blink(void);
+-void common_prejump();
+-void common_preduck();
++void common_prejump();
++void common_preduck();
+ void common_idle();
+ void damage_recursive(entity *target);
+ void tryjump(float, float, float, int);
+-void dojump(float, float, float, int);
+-void tryduck(entity*);
+-void tryduckrise(entity*);
++void dojump(float, float, float, int);
++void tryduck(entity*);
++void tryduckrise(entity*);
+ void tryvictorypose(entity*);
+ void doduck(entity*);
+ void biker_drive(void);
+@@ -2896,23 +2899,23 @@ entity *spawn(float x, float z, float a, int direction, char *name, int index, s
+ void ent_unlink(entity *e);
+ void ents_link(entity *e1, entity *e2);
+ void kill_entity(entity *victim);
+-void kill_all();
+-
+-
+-int projectile_wall_deflect(entity *ent);
+-
+-int boomerang_catch(entity *ent, float distance_x_current);
+-void boomerang_initialize(entity *ent);
+-int boomerang_move();
+-void sort_invert_by_parent(entity *ent, entity* parent);
+-
+-int checkgrab(entity *other, s_collision_attack *attack);
+-void checkdamageeffects(s_collision_attack *attack);
+-void checkdamagedrop(s_collision_attack *attack);
+-void checkmpadd();
+-void checkhitscore(entity *other, s_collision_attack *attack);
+-int calculate_force_damage(entity *other, s_collision_attack *attack);
+-void checkdamage(entity *other, s_collision_attack *attack);
++void kill_all();
++
++
++int projectile_wall_deflect(entity *ent);
++
++int boomerang_catch(entity *ent, float distance_x_current);
++void boomerang_initialize(entity *ent);
++int boomerang_move();
++void sort_invert_by_parent(entity *ent, entity* parent);
++
++int checkgrab(entity *other, s_collision_attack *attack);
++void checkdamageeffects(s_collision_attack *attack);
++void checkdamagedrop(s_collision_attack *attack);
++void checkmpadd();
++void checkhitscore(entity *other, s_collision_attack *attack);
++int calculate_force_damage(entity *other, s_collision_attack *attack);
++void checkdamage(entity *other, s_collision_attack *attack);
+ void checkdamageonlanding();
+ int checkhit(entity *attacker, entity *target);
+ int checkhole(float x, float z);
+@@ -2928,18 +2931,18 @@ int checkholes(float, float);
+ int checkwall_below(float x, float z, float a);
+ int checkwall_index(float x, float z);
+ float check_basemap(int x, int z);
+-int check_basemap_index(int x, int z);
+-float checkbase(float x, float z, float y, entity *ent);
+-entity *check_block_obstacle(entity *entity);
+-int check_block_wall(entity *entity);
+-int colorset_timed_expire(entity *ent);
+-int check_lost();
+-int check_range_target_all(entity *ent, entity *target, e_animations animation_id);
+-int check_range_target_base(entity *ent, entity *target, s_anim *animation);
+-int check_range_target_x(entity *ent, entity *target, s_anim *animation);
+-int check_range_target_y(entity *ent, entity *target, s_anim *animation);
+-int check_range_target_z(entity *ent, entity *target, s_anim *animation);
+-
++int check_basemap_index(int x, int z);
++float checkbase(float x, float z, float y, entity *ent);
++entity *check_block_obstacle(entity *entity);
++int check_block_wall(entity *entity);
++int colorset_timed_expire(entity *ent);
++int check_lost();
++int check_range_target_all(entity *ent, entity *target, e_animations animation_id);
++int check_range_target_base(entity *ent, entity *target, s_anim *animation);
++int check_range_target_x(entity *ent, entity *target, s_anim *animation);
++int check_range_target_y(entity *ent, entity *target, s_anim *animation);
++int check_range_target_z(entity *ent, entity *target, s_anim *animation);
++
+ 
+ void generate_basemap(int map_index, float rx, float rz, float x_size, float z_size, float min_a, float max_a, int x_cont);
+ int testmove(entity *, float, float, float, float);
+@@ -2949,16 +2952,16 @@ entity *check_platform_between(float x, float z, float amin, float amax, entity
+ entity *check_platform(float x, float z, entity *exclude);
+ float get_platform_base(entity *);
+ int is_on_platform(entity *);
+-entity *get_platform_on(entity *);
++entity *get_platform_on(entity *);
+ void do_item_script(entity *ent, entity *item);
+-void do_attack(entity *e);
+-int do_catch(entity *ent, entity *target, int animation_catch);
++void do_attack(entity *e);
++int do_catch(entity *ent, entity *target, int animation_catch);
+ int do_energy_charge(entity *ent);
+ void adjust_base(entity *e, entity **pla);
+-void check_gravity(entity *e);
++void check_gravity(entity *e);
+ bool check_jumpframe(entity *ent, unsigned int frame);
+-bool check_landframe(entity *ent);
+-int check_edge(entity *ent);
++bool check_landframe(entity *ent);
++int check_edge(entity *ent);
+ void update_ents();
+ entity *find_ent_here(entity *exclude, float x, float z, int types, int (*test)(entity *, entity *));
+ void display_ents();
+@@ -2983,7 +2986,7 @@ int long_attack();
+ int melee_attack();
+ void dothrow();
+ void doprethrow();
+-void dograbattack(int which);
++void dograbattack(int which);
+ e_animations do_grab_attack_finish(entity *ent, int which);
+ int check_special();
+ void normal_prepare();
+@@ -3053,7 +3056,7 @@ void drop_all_enemies();
+ void kill_all_enemies();
+ void smart_bomb(entity *e, s_collision_attack *attack);
+ void anything_walk(void);
+-entity *knife_spawn(char *name, int index, float x, float z, float a, int direction, int type, int map);
++entity *knife_spawn(char *name, int index, float x, float z, float a, int direction, int type, int map);
+ entity *boomerang_spawn(char *name, int index, float x, float z, float a, int direction, int map);
+ entity *bomb_spawn(char *name, int index, float x, float z, float a, int direction, int map);
+ void bomb_explode(void);
+@@ -3078,7 +3081,7 @@ void update(int ingame, int usevwait);
+ void fade_out(int type, int speed);
+ void apply_controls();
+ void plan();
+-int is_in_backrun(entity*);
++int is_in_backrun(entity*);
+ int ai_check_ducking();
+ int ai_check_warp();
+ int ai_check_lie();
+@@ -3104,7 +3107,7 @@ int load_saved_game();
+ void term_videomodes();
+ void init_videomodes(int log);
+ void safe_set(int *arr, int index, int newkey, int oldkey);
+-
++
+ void keyboard_setup_menu(int player);
+ void keyboard_setup(int player);
+ void inputrefresh();
+diff --git a/engine/openborscript.c b/engine/openborscript.c
+index b340a349..0704eeec 100644
+--- a/engine/openborscript.c
++++ b/engine/openborscript.c
+@@ -45,81 +45,82 @@ static s_drawmethod drawmethod;
+ int            max_indexed_vars = 0;
+ int            max_entity_vars = 0;
+ int            max_script_vars = 0;
+-int			   no_nested_script = 0;
+-
+-extern int  ent_count;
+-extern int  ent_max;
+-extern int  gameOver;
+-extern int  selectScreen;
+-extern int	titleScreen;
+-extern int  hallOfFame;
+-extern int	showComplete;
+-extern char	*currentScene;
+-extern int  enginecreditsScreen;
+-extern int	menuScreen;
+-extern int  optionsMenu;
+-extern int	controloptionsMenu;
+-extern int	videooptionsMenu;
+-extern int  soundoptionsMenu;
+-extern int	systemoptionsMenu;
+-extern int	startgameMenu;
+-extern int  newgameMenu;
+-extern int  loadgameMenu;
+-extern int  num_difficulties;
+-extern u32  _time;
+-extern int goto_mainmenu_flag;
+-extern int _pause;
+-extern int timeleft;
+-extern int gfx_x_offset;
+-extern int gfx_y_offset;
+-extern int gfx_y_offset_adj;
+-extern s_lasthit lasthit;
+-extern int current_set;
+-extern int current_level;
+-extern int current_stage;
+-extern int timevar;
+-extern float   bgtravelled;
+-extern float   vbgtravelled;
+-extern int traveltime;
+-extern int texttime;
+-extern int timetoshow;
+-extern int is_total_timeover;
+-extern int showgo;
+-extern float   advancex;
+-extern float   advancey;
+-extern float   scrolldx;
+-extern float   scrolldy;
+-extern float   scrollminz;
+-extern float   scrollmaxz;
+-extern float   blockade;
+-extern float   scrollminx;
+-extern float   scrollmaxx;
+-extern s_videomodes videomodes;
+-extern int  panel_height;
+-extern char branch_name[MAX_NAME_LEN + 1];
+-extern s_set_entry *levelsets;
+-extern unsigned int models_loaded;
+-//extern unsigned int   models_cached;
+-extern int viewportx;
+-extern int viewporty;
+-extern int viewportw;
+-extern int viewporth;
+-extern int nosave;
+-extern int nopause;
+-extern int nofadeout;
+-extern int noscreenshot;
+-extern int nojoin;
+-extern s_screen *vscreen;
+-extern entity *smartbomber;
+-extern entity *textbox;
+-extern s_screen *background;
+-extern int skiptoset;
+-extern s_slow_motion    slowmotion;
+-extern int shadowcolor;
+-extern int shadowalpha;
+-extern int shadowopacity;
+-extern s_axis_plane_vertical_int light;
+-extern int max_attack_types;
++int			   no_nested_script = 0;
++
++extern int  finisheds_games_count;
++extern int  ent_count;
++extern int  ent_max;
++extern int  gameOver;
++extern int  selectScreen;
++extern int	titleScreen;
++extern int  hallOfFame;
++extern int	showComplete;
++extern char	*currentScene;
++extern int  enginecreditsScreen;
++extern int	menuScreen;
++extern int  optionsMenu;
++extern int	controloptionsMenu;
++extern int	videooptionsMenu;
++extern int  soundoptionsMenu;
++extern int	systemoptionsMenu;
++extern int	startgameMenu;
++extern int  newgameMenu;
++extern int  loadgameMenu;
++extern int  num_difficulties;
++extern u32  _time;
++extern int goto_mainmenu_flag;
++extern int _pause;
++extern int timeleft;
++extern int gfx_x_offset;
++extern int gfx_y_offset;
++extern int gfx_y_offset_adj;
++extern s_lasthit lasthit;
++extern int current_set;
++extern int current_level;
++extern int current_stage;
++extern int timevar;
++extern float   bgtravelled;
++extern float   vbgtravelled;
++extern int traveltime;
++extern int texttime;
++extern int timetoshow;
++extern int is_total_timeover;
++extern int showgo;
++extern float   advancex;
++extern float   advancey;
++extern float   scrolldx;
++extern float   scrolldy;
++extern float   scrollminz;
++extern float   scrollmaxz;
++extern float   blockade;
++extern float   scrollminx;
++extern float   scrollmaxx;
++extern s_videomodes videomodes;
++extern int  panel_height;
++extern char branch_name[MAX_NAME_LEN + 1];
++extern s_set_entry *levelsets;
++extern unsigned int models_loaded;
++//extern unsigned int   models_cached;
++extern int viewportx;
++extern int viewporty;
++extern int viewportw;
++extern int viewporth;
++extern int nosave;
++extern int nopause;
++extern int nofadeout;
++extern int noscreenshot;
++extern int nojoin;
++extern s_screen *vscreen;
++extern entity *smartbomber;
++extern entity *textbox;
++extern s_screen *background;
++extern int skiptoset;
++extern s_slow_motion    slowmotion;
++extern int shadowcolor;
++extern int shadowalpha;
++extern int shadowopacity;
++extern s_axis_plane_vertical_int light;
++extern int max_attack_types;
+ extern int max_animations;
+ 
+ static void clear_named_var_list(List *list, int level)
+@@ -684,12 +685,12 @@ static s_collision_attack attack;
+ HRESULT system_isempty(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount)
+ {
+     if(paramCount != 1)
+-    {
++    {
+         *pretvar = NULL;
+         return E_FAIL;
+     }
+ 
+-    ScriptVariant_ChangeType(*pretvar, VT_INTEGER);
++    ScriptVariant_ChangeType(*pretvar, VT_INTEGER);
+ 
+     (*pretvar)->lVal = (LONG)( (varlist[0])->vt == VT_EMPTY );
+ 
+@@ -923,7 +924,7 @@ HRESULT system_typeof(ScriptVariant **varlist , ScriptVariant **pretvar, int par
+ static const char *svlist[] =
+ {
+     "background",
+-    "blockade",
++    "blockade",
+     "bossescount",
+     "branchname",
+     "cheats",
+@@ -959,7 +960,8 @@ static const char *svlist[] =
+     "in_menuscreen",
+     "in_new_game",
+     "in_options",
+-    "in_selectscreen",
++    //"in_selectscreen",
++    "in_sa_count",
+     "in_showcomplete",
+     "in_sound_options",
+     "in_start_game",
+@@ -996,7 +998,7 @@ static const char *svlist[] =
+     "nosave",
+     "noscreenshot",
+     "noshowcomplete",
+-    "numbasemaps",
++    "numbasemaps",
+     "numbosses",
+     "numholes",
+     "numlayers",
+@@ -2027,7 +2029,7 @@ enum entityproperty_enum
+     _ep_attackthrottletime,
+     _ep_autokill,
+     _ep_base,
+-    _ep_bbox,
++    _ep_bbox,
+     _ep_binding,
+     _ep_blink,
+     _ep_blockback,
+@@ -2051,13 +2053,13 @@ enum entityproperty_enum
+     _ep_defense,
+     _ep_destx,
+     _ep_destz,
+-    _ep_detect,
++    _ep_detect,
+     _ep_die_on_landing,
+     _ep_direction,
+     _ep_dot,
+     _ep_dropframe,
+-    _ep_edelay,
+-    _ep_edge,
++    _ep_edelay,
++    _ep_edge,
+     _ep_edgerange,
+     _ep_energycost,
+     _ep_escapecount,
+@@ -2137,7 +2139,7 @@ enum entityproperty_enum
+     _ep_path,
+     _ep_pathfindstep,
+     _ep_playerindex,
+-    _ep_position,
++    _ep_position,
+     _ep_prevanimationid,
+     _ep_projectile,
+     _ep_projectilehit,
+@@ -2227,7 +2229,7 @@ static const char *eplist[] =
+     "attackthrottletime",
+     "autokill",
+     "base",
+-    "bbox",
++    "bbox",
+     "binding",
+     "blink",
+     "blockback",
+@@ -2251,13 +2253,13 @@ static const char *eplist[] =
+     "defense",
+     "destx",
+     "destz",
+-    "detect",
++    "detect",
+     "die_on_landing",
+     "direction",
+     "dot",
+     "dropframe",
+-    "edelay",
+-    "edge",
++    "edelay",
++    "edge",
+     "edgerange",
+     "energycost",
+     "escapecount",
+@@ -2337,7 +2339,7 @@ static const char *eplist[] =
+     "path",
+     "pathfindstep",
+     "playerindex",
+-    "position",
++    "position",
+     "prevanimationid",
+     "projectile",
+     "projectilehit",
+@@ -2408,7 +2410,7 @@ enum aiflag_enum
+     _ep_aiflag_blocking,
+     _ep_aiflag_charging,
+     _ep_aiflag_dead,
+-    _ep_aiflag_drop,
++    _ep_aiflag_drop,
+     _ep_aiflag_ducking,
+     _ep_aiflag_falling,
+     _ep_aiflag_frozen,
+@@ -2420,8 +2422,8 @@ enum aiflag_enum
+     _ep_aiflag_invincible,
+     _ep_aiflag_jumpid,
+     _ep_aiflag_jumping,
+-    _ep_aiflag_projectile,
+-    _ep_aiflag_riseattacking,
++    _ep_aiflag_projectile,
++    _ep_aiflag_riseattacking,
+     _ep_aiflag_rising,
+     _ep_aiflag_running,
+     _ep_aiflag_toexplode,
+@@ -2441,7 +2443,7 @@ static const char *eplist_aiflag[] =
+     "blocking",
+     "charging",
+     "dead",
+-    "drop",
++    "drop",
+     "ducking",
+     "falling",
+     "frozen",
+@@ -2453,36 +2455,36 @@ static const char *eplist_aiflag[] =
+     "invincible",
+     "jumpid",
+     "jumping",
+-    "projectile",
+-    "riseattacking",
++    "projectile",
++    "riseattacking",
+     "rising",
+     "running",
+     "toexplode",
+     "turning",
+     "walking",
+     "walkmode",
+-};
+-
++};
++
+ enum boomerang_enum
+ {
+     _ep_boomerang_acceleration,
+     _ep_boomerang_hdistance,
+     _ep_boomerang_the_end,
+-};
+-
++};
++
+ static const char *eplist_boomerang[] =
+ {
+     "acceleration",
+     "hdistance",
+-};
+-
++};
++
+ enum edgerange_enum
+ {
+     _ep_edgerange_x,
+     _ep_edgerange_z,
+     _ep_edgerange_the_end,
+-};
+-
++};
++
+ static const char *eplist_edgerange[] =
+ {
+     "x",
+@@ -2688,8 +2690,8 @@ enum _prop_summonframe_enum
+     _PROP_SUMMONFRAME_Y,
+     _PROP_SUMMONFRAME_Z,
+     _PROP_SUMMONFRAME_THE_END
+-};
+-
++};
++
+ enum _prop_starvelocity_enum
+ {
+     _PROP_STARVELOCITY_1,
+@@ -3128,14 +3130,14 @@ int mapstrings_entityproperty(ScriptVariant **varlist, int paramCount)
+         MAPSTRINGS(varlist[2], eplist_aiflag, _ep_aiflag_the_end,
+                    _is_not_a_known_subproperty_of_, eps);
+         break;
+-    }
++    }
+     // map subproperties of boomerang property
+     case _ep_boomerang:
+     {
+         MAPSTRINGS(varlist[2], eplist_boomerang, _ep_boomerang_the_end,
+                    _is_not_a_known_subproperty_of_, eps);
+         break;
+-    }
++    }
+     // map subproperties of edgerange property
+     case _ep_edgerange:
+     {
+@@ -3385,7 +3387,7 @@ HRESULT openbor_getentityproperty(ScriptVariant **varlist , ScriptVariant **pret
+             break;
+         case _ep_aiflag_blocking:
+             (*pretvar)->lVal = (LONG)ent->blocking;
+-            break;
++            break;
+         case _ep_aiflag_ducking:
+             (*pretvar)->lVal = (LONG)ent->ducking;
+             break;
+@@ -3397,10 +3399,10 @@ HRESULT openbor_getentityproperty(ScriptVariant **varlist , ScriptVariant **pret
+             break;
+         case _ep_aiflag_inpain:
+             (*pretvar)->lVal = (LONG)ent->inpain;
+-            break;
++            break;
+         case _ep_aiflag_rising:
+             (*pretvar)->lVal = (LONG)ent->rising;
+-            break;
++            break;
+         case _ep_aiflag_riseattacking:
+             (*pretvar)->lVal = (LONG)ent->riseattacking;
+             break;
+@@ -3519,7 +3521,7 @@ HRESULT openbor_getentityproperty(ScriptVariant **varlist , ScriptVariant **pret
+         ScriptVariant_ChangeType(*pretvar, VT_INTEGER);
+         (*pretvar)->lVal = (LONG)ent->animnum;
+         break;
+-    }
++    }
+     case _ep_prevanimationid:
+     {
+         ScriptVariant_ChangeType(*pretvar, VT_INTEGER);
+@@ -3632,33 +3634,33 @@ HRESULT openbor_getentityproperty(ScriptVariant **varlist , ScriptVariant **pret
+         break;
+     }
+     case _ep_boomerang:
+-    {
+-        if(paramCount < 3)
+-        {
+-            break;
+-        }
+-        arg = varlist[2];
+-        if(arg->vt != VT_INTEGER)
+-        {
+-            printf("You must give a string name for boomerang.\n");
+-            return E_FAIL;
+-        }
+-        ltemp = arg->lVal;
+-
+-        ScriptVariant_ChangeType(*pretvar, VT_DECIMAL);
+-        switch(ltemp)
+-        {
+-        case _ep_boomerang_acceleration:
+-            (*pretvar)->dblVal = (DOUBLE)ent->modeldata.boomerang_prop.acceleration;
+-            break;
+-        case _ep_boomerang_hdistance:
+-            (*pretvar)->dblVal = (DOUBLE)ent->modeldata.boomerang_prop.hdistance;
+-            break;
+-        default:
+-            ScriptVariant_Clear(*pretvar);
+-            return E_FAIL;
+-        }
+-        break;
++    {
++        if(paramCount < 3)
++        {
++            break;
++        }
++        arg = varlist[2];
++        if(arg->vt != VT_INTEGER)
++        {
++            printf("You must give a string name for boomerang.\n");
++            return E_FAIL;
++        }
++        ltemp = arg->lVal;
++
++        ScriptVariant_ChangeType(*pretvar, VT_DECIMAL);
++        switch(ltemp)
++        {
++        case _ep_boomerang_acceleration:
++            (*pretvar)->dblVal = (DOUBLE)ent->modeldata.boomerang_prop.acceleration;
++            break;
++        case _ep_boomerang_hdistance:
++            (*pretvar)->dblVal = (DOUBLE)ent->modeldata.boomerang_prop.hdistance;
++            break;
++        default:
++            ScriptVariant_Clear(*pretvar);
++            return E_FAIL;
++        }
++        break;
+     }
+     case _ep_boss:
+     {
+@@ -3677,7 +3679,7 @@ HRESULT openbor_getentityproperty(ScriptVariant **varlist , ScriptVariant **pret
+         ScriptVariant_ChangeType(*pretvar, VT_PTR);
+         (*pretvar)->ptrVal = (VOID *)ent->binding.ent;
+         break;
+-    }
++    }
+     case _ep_binding:
+     {
+         ScriptVariant_ChangeType(*pretvar, VT_PTR);
+@@ -3746,9 +3748,9 @@ HRESULT openbor_getentityproperty(ScriptVariant **varlist , ScriptVariant **pret
+     }
+     case _ep_damage_on_landing:
+     {
+-        ScriptVariant_ChangeType(*pretvar, VT_INTEGER);
+-        (*pretvar)->lVal = (LONG)ent->damage_on_landing.attack_force;
+-
++        ScriptVariant_ChangeType(*pretvar, VT_INTEGER);
++        (*pretvar)->lVal = (LONG)ent->damage_on_landing.attack_force;
++
+ 
+         break;
+     }
+@@ -3849,7 +3851,7 @@ HRESULT openbor_getentityproperty(ScriptVariant **varlist , ScriptVariant **pret
+         ScriptVariant_ChangeType(*pretvar, VT_INTEGER);
+         (*pretvar)->lVal = (LONG)ent->modeldata.stealth.detect;
+         break;
+-    }
++    }
+     case _ep_die_on_landing:
+     {
+         ScriptVariant_ChangeType(*pretvar, VT_INTEGER);
+@@ -3976,7 +3978,7 @@ HRESULT openbor_getentityproperty(ScriptVariant **varlist , ScriptVariant **pret
+             break;
+         }
+         case _ep_edelay_factor:
+-        {
++        {
+             ScriptVariant_ChangeType(*pretvar, VT_DECIMAL);
+             (*pretvar)->dblVal = (DOUBLE)ent->modeldata.edelay.factor;
+             break;
+@@ -4006,41 +4008,41 @@ HRESULT openbor_getentityproperty(ScriptVariant **varlist , ScriptVariant **pret
+             return E_FAIL;
+         }
+         break;
+-    }
++    }
+     case _ep_edge:
+     {
+         ScriptVariant_ChangeType(*pretvar, VT_INTEGER);
+         (*pretvar)->lVal = (LONG)ent->edge;
+         break;
+-    }
++    }
+     case _ep_edgerange:
+-    {
+-        if(paramCount < 3)
+-        {
+-            break;
+-        }
+-        arg = varlist[2];
+-        if(arg->vt != VT_INTEGER)
+-        {
+-            printf("You must give a string name for edgerange.\n");
+-            return E_FAIL;
+-        }
+-        ltemp = arg->lVal;
+-
+-        ScriptVariant_ChangeType(*pretvar, VT_DECIMAL);
+-        switch(ltemp)
+-        {
+-        case _ep_edgerange_x:
+-            (*pretvar)->dblVal = (DOUBLE)ent->modeldata.edgerange.x;
+-            break;
+-        case _ep_edgerange_z:
+-            (*pretvar)->dblVal = (DOUBLE)ent->modeldata.edgerange.z;
+-            break;
+-        default:
+-            ScriptVariant_Clear(*pretvar);
+-            return E_FAIL;
+-        }
+-        break;
++    {
++        if(paramCount < 3)
++        {
++            break;
++        }
++        arg = varlist[2];
++        if(arg->vt != VT_INTEGER)
++        {
++            printf("You must give a string name for edgerange.\n");
++            return E_FAIL;
++        }
++        ltemp = arg->lVal;
++
++        ScriptVariant_ChangeType(*pretvar, VT_DECIMAL);
++        switch(ltemp)
++        {
++        case _ep_edgerange_x:
++            (*pretvar)->dblVal = (DOUBLE)ent->modeldata.edgerange.x;
++            break;
++        case _ep_edgerange_z:
++            (*pretvar)->dblVal = (DOUBLE)ent->modeldata.edgerange.z;
++            break;
++        default:
++            ScriptVariant_Clear(*pretvar);
++            return E_FAIL;
++        }
++        break;
+     }
+     case _ep_energycost:
+     {
+@@ -4488,12 +4490,12 @@ HRESULT openbor_getentityproperty(ScriptVariant **varlist , ScriptVariant **pret
+         {
+             break;
+         }
+-
+-        // entity must have a land frame set.
+-        if(!ent->modeldata.animation[i]->landframe)
+-        {
+-            break;
+-        }
++
++        // entity must have a land frame set.
++        if(!ent->modeldata.animation[i]->landframe)
++        {
++            break;
++        }
+ 
+         switch(ltemp)
+         {
+@@ -5585,7 +5587,7 @@ HRESULT openbor_changeentityproperty(ScriptVariant **varlist , ScriptVariant **p
+                 break;
+             case _ep_aiflag_blocking:
+                 ent->blocking = (LONG)ltemp;
+-                break;
++                break;
+             case _ep_aiflag_ducking:
+                 ent->ducking = (LONG)ltemp;
+                 break;
+@@ -5597,10 +5599,10 @@ HRESULT openbor_changeentityproperty(ScriptVariant **varlist , ScriptVariant **p
+                 break;
+             case _ep_aiflag_inpain:
+                 ent->inpain = (LONG)ltemp;
+-                break;
++                break;
+             case _ep_aiflag_rising:
+                 ent->rising = (LONG)ltemp;
+-                break;
++                break;
+             case _ep_aiflag_riseattacking:
+                 ent->riseattacking = (LONG)ltemp;
+                 break;
+@@ -5770,36 +5772,36 @@ HRESULT openbor_changeentityproperty(ScriptVariant **varlist , ScriptVariant **p
+         break;
+     }
+     case _ep_boomerang:
+-    {
+-        if(varlist[2]->vt != VT_INTEGER)
+-        {
+-            if(varlist[2]->vt != VT_STR)
+-            {
+-                printf("You must give a string value for boomerang name.\n");
+-            }
+-            goto changeentityproperty_error;
+-        }
+-        if(paramCount < 4)
+-        {
+-            break;
+-        }
+-
+-        if(SUCCEEDED(ScriptVariant_DecimalValue(varlist[3], &dbltemp)))
+-        {
+-            switch(varlist[2]->lVal)
+-            {
+-            case _ep_boomerang_acceleration:
+-                ent->modeldata.boomerang_prop.acceleration = (DOUBLE)dbltemp;
+-                break;
+-            case _ep_boomerang_hdistance:
+-                ent->modeldata.boomerang_prop.hdistance = (DOUBLE)dbltemp;
+-                break;
+-            default:
+-                printf("Unknown boomerang.\n");
+-                goto changeentityproperty_error;
+-            }
+-        }
+-        break;
++    {
++        if(varlist[2]->vt != VT_INTEGER)
++        {
++            if(varlist[2]->vt != VT_STR)
++            {
++                printf("You must give a string value for boomerang name.\n");
++            }
++            goto changeentityproperty_error;
++        }
++        if(paramCount < 4)
++        {
++            break;
++        }
++
++        if(SUCCEEDED(ScriptVariant_DecimalValue(varlist[3], &dbltemp)))
++        {
++            switch(varlist[2]->lVal)
++            {
++            case _ep_boomerang_acceleration:
++                ent->modeldata.boomerang_prop.acceleration = (DOUBLE)dbltemp;
++                break;
++            case _ep_boomerang_hdistance:
++                ent->modeldata.boomerang_prop.hdistance = (DOUBLE)dbltemp;
++                break;
++            default:
++                printf("Unknown boomerang.\n");
++                goto changeentityproperty_error;
++            }
++        }
++        break;
+     }
+     case _ep_boss:
+     {
+@@ -6036,7 +6038,7 @@ HRESULT openbor_changeentityproperty(ScriptVariant **varlist , ScriptVariant **p
+         }
+ 
+         break;
+-    }
++    }
+     case _ep_edge:
+     {
+         if(SUCCEEDED(ScriptVariant_IntegerValue(varlist[2], &ltemp)))
+@@ -6044,38 +6046,38 @@ HRESULT openbor_changeentityproperty(ScriptVariant **varlist , ScriptVariant **p
+             ent->edge = (LONG)ltemp;
+         }
+         break;
+-    }
++    }
+     case _ep_edgerange:
+-    {
+-        if(varlist[2]->vt != VT_INTEGER)
+-        {
+-            if(varlist[2]->vt != VT_STR)
+-            {
+-                printf("You must give a string value for edgerange name.\n");
+-            }
+-            goto changeentityproperty_error;
+-        }
+-        if(paramCount < 4)
+-        {
+-            break;
+-        }
+-
+-        if(SUCCEEDED(ScriptVariant_DecimalValue(varlist[3], &dbltemp)))
+-        {
+-            switch(varlist[2]->lVal)
+-            {
+-            case _ep_edgerange_x:
+-                ent->modeldata.edgerange.x = (DOUBLE)dbltemp;
+-                break;
+-            case _ep_edgerange_z:
+-                ent->modeldata.edgerange.z = (DOUBLE)dbltemp;
+-                break;
+-            default:
+-                printf("Unknown edgerange.\n");
+-                goto changeentityproperty_error;
+-            }
+-        }
+-        break;
++    {
++        if(varlist[2]->vt != VT_INTEGER)
++        {
++            if(varlist[2]->vt != VT_STR)
++            {
++                printf("You must give a string value for edgerange name.\n");
++            }
++            goto changeentityproperty_error;
++        }
++        if(paramCount < 4)
++        {
++            break;
++        }
++
++        if(SUCCEEDED(ScriptVariant_DecimalValue(varlist[3], &dbltemp)))
++        {
++            switch(varlist[2]->lVal)
++            {
++            case _ep_edgerange_x:
++                ent->modeldata.edgerange.x = (DOUBLE)dbltemp;
++                break;
++            case _ep_edgerange_z:
++                ent->modeldata.edgerange.z = (DOUBLE)dbltemp;
++                break;
++            default:
++                printf("Unknown edgerange.\n");
++                goto changeentityproperty_error;
++            }
++        }
++        break;
+     }
+     case _ep_energycost:
+     {
+@@ -7818,8 +7820,8 @@ HRESULT openbor_getplayerproperty(ScriptVariant **varlist , ScriptVariant **pret
+ 
+         (*pretvar)->lVal = (LONG)(model_cache[cacheindex].model->maps_loaded + 1);
+         break;
+-    }
+-    default:
++    }
++    default:
+     {
+         //printf("Property name '%s' is not supported by function getplayerproperty.\n", propname);
+         *pretvar = NULL;
+@@ -8176,860 +8178,862 @@ cpperror:
+     ScriptVariant_ToString(arg, buffer);
+     printf("Function changeplayerproperty receives an invalid value: %s.\n", buffer);
+     return E_FAIL;
+-}
+-
+-//this method is used by script engine, we move it here
+-// it will get a system property, put it in the ScriptVariant
+-// if failed return 0, otherwise return 1
+-int getsyspropertybyindex(ScriptVariant *var, int index)
+-{
+-    if(!var)
+-    {
+-        return 0;
+-    }
+-
+-    switch(index)
+-    {
+-    case _sv_count_enemies:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = count_ents(TYPE_ENEMY);
+-        break;
+-    case _sv_count_players:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = count_ents(TYPE_PLAYER);
+-        break;
+-    case _sv_count_npcs:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = count_ents(TYPE_NPC);
+-        break;
+-    case _sv_count_entities:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = ent_count;
+-        break;
+-    case _sv_ent_max:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = ent_max;
+-        break;
+-    case _sv_in_level:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = (level != NULL);
+-        break;
+-    case _sv_in_gameoverscreen:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = gameOver;
+-        break;
+-    case _sv_in_menuscreen:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        if(selectScreen || titleScreen || hallOfFame || gameOver || showComplete || currentScene || level || enginecreditsScreen)
+-        {
+-            var->lVal = 0;
+-        }
+-        else
+-        {
+-            var->lVal = menuScreen;
+-        }
+-        break;
+-    case _sv_in_enginecreditsscreen:
+-    		ScriptVariant_ChangeType(var, VT_INTEGER);
+-    		var->lVal = enginecreditsScreen;
+-    		break;
+-    case _sv_in_options:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = optionsMenu;
+-        break;
+-    case _sv_in_system_options:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = systemoptionsMenu;
+-        break;
+-    case _sv_in_cheat_options:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = (optionsMenu && is_cheat_actived()) ? 1:0;
+-        break;
+-    case _sv_cheats:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = is_cheat_actived();
+-        break;
+-    case _sv_in_control_options:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = controloptionsMenu;
+-        break;
+-    case _sv_in_sound_options:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = soundoptionsMenu;
+-        break;
+-    case _sv_in_video_options:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = videooptionsMenu;
+-        break;
+-    case _sv_in_start_game:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = startgameMenu;
+-        break;
+-    case _sv_in_new_game:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = newgameMenu;
+-        break;
+-    case _sv_in_load_game:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = loadgameMenu;
+-        break;
+-    case _sv_sets_count:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = num_difficulties;
+-        break;
+-    case _sv_in_showcomplete:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = showComplete;
+-        break;
+-    case _sv_in_titlescreen:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = titleScreen;
+-        break;
+-    case _sv_in_halloffamescreen:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = (hallOfFame);
+-        break;
+-    case _sv_sample_play_id:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = sample_play_id;
+-    case _sv_effectvol:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = savedata.effectvol;
+-        break;
+-    case _sv_elapsed_time:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = _time;
+-        break;
+-    case _sv_game_speed:
+-        if(!level)
+-        {
+-            return 0;
+-        }
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = GAME_SPEED;
+-        break;
+-    case _sv_game_paused:
+-    case _sv_pause:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        if( !(goto_mainmenu_flag&1) ) var->lVal = (_pause);
+-        else var->lVal = 0;
+-        break;
+-    case _sv_game_time:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = timeleft;
+-        break;
+-    case _sv_porting:
+-    {
+-        e_porting porting;
+-
+-        #if ANDROID
+-            porting = PORTING_ANDROID;
+-        #elif DARWIN
+-            porting = PORTING_DARWIN;
+-        #elif DC
+-            porting = PORTING_DREAMCAST;
+-        #elif GPX2
+-            porting = PORTING_GPX2;
+-        #elif LINUX
+-            porting = PORTING_LINUX;
+-        #elif OPENDINGUX
+-            porting = PORTING_OPENDINGUX;
+-        #elif PSP
+-            porting = PORTING_PSP;
+-        #elif WII
+-            porting = PORTING_WII;
+-        #elif WIN
+-            porting = PORTING_WINDOWS;
+-        #elif WIZ
+-            porting = PORTING_WIZ;
+-        #elif XBOX
+-            porting = PORTING_XBOX;
+-        #elif VITA
+-            porting = PORTING_VITA;
+-        #else
+-            porting = PORTING_UNKNOWN;
+-        #endif
+-
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = porting;
+-        break;
+-    }
+-    case _sv_gfx_x_offset:
+-        if(!level)
+-        {
+-            return 0;
+-        }
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = gfx_x_offset;
+-        break;
+-    case _sv_gfx_y_offset:
+-        if(!level)
+-        {
+-            return 0;
+-        }
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = gfx_y_offset;
+-        break;
+-    case _sv_gfx_y_offset_adj:
+-        if(!level)
+-        {
+-            return 0;
+-        }
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = gfx_y_offset_adj;
+-        break;
+-    case _sv_in_selectscreen:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = selectScreen;
+-        break;
+-    case _sv_lasthita:
+-    case _sv_lasthity:
+-        ScriptVariant_ChangeType(var, VT_DECIMAL);
+-        var->dblVal = lasthit.position.y;
+-        break;
+-    case _sv_lasthitc:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = lasthit.confirm;
+-        break;
+-    case _sv_lasthitt:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-
+-        if(lasthit.attack)
+-        {
+-            var->lVal = lasthit.attack->attack_type;
+-        }
+-
+-        break;
+-    case _sv_lasthitx:
+-        ScriptVariant_ChangeType(var, VT_DECIMAL);
+-        var->dblVal = lasthit.position.x;
+-        break;
+-    case _sv_lasthitz:
+-        ScriptVariant_ChangeType(var, VT_DECIMAL);
+-        var->dblVal = lasthit.position.z;
+-        break;
+-    case _sv_xpos:
+-        if(!level)
+-        {
+-            return 0;
+-        }
+-        ScriptVariant_ChangeType(var, VT_DECIMAL);
+-        var->dblVal = advancex;
+-        break;
+-    case _sv_ypos:
+-        if(!level)
+-        {
+-            return 0;
+-        }
+-        ScriptVariant_ChangeType(var, VT_DECIMAL);
+-        var->dblVal = advancey;
+-        break;
+-    case _sv_hresolution:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = videomodes.hRes;
+-        break;
+-    case _sv_vresolution:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = videomodes.vRes;
+-        break;
+-    case _sv_current_scene:
+-        if(currentScene)
+-        {
+-            ScriptVariant_ChangeType(var, VT_STR);
+-            var->strVal = StrCache_CreateNewFrom(currentScene);
+-        }
+-        else
+-        {
+-            ScriptVariant_Clear(var);
+-        }
+-        break;
+-    case _sv_current_set:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = current_set;
+-        break;
+-    case _sv_current_level:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = current_level;
+-        break;
+-    case _sv_current_palette:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = current_palette;
+-        break;
+-    case _sv_current_stage:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = current_stage;
+-        break;
+-    case _sv_levelwidth:
+-        if(!level)
+-        {
+-            return 0;
+-        }
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = level->width;
+-        break;
+-    case _sv_levelheight:
+-        if(!level)
+-        {
+-            return 0;
+-        }
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = panel_height;
+-        break;
+-    case _sv_branchname:
+-        ScriptVariant_ChangeType(var, VT_STR);
+-        var->strVal = StrCache_CreateNewFrom(branch_name);
+-        break;
+-    case _sv_current_branch:
+-        if(level != NULL && levelsets && levelsets[current_set].levelorder && levelsets[current_set].levelorder[current_level].branchname)
+-        {
+-            ScriptVariant_ChangeType(var, VT_STR);
+-            var->strVal = StrCache_CreateNewFrom(levelsets[current_set].levelorder[current_level].branchname);
+-        }
+-        else
+-        {
+-            ScriptVariant_Clear(var);
+-        }
+-        break;
+-    case _sv_pakname:
+-    {
+-        char tempstr[MAX_BUFFER_LEN];
+-        getPakName(tempstr, -1);
+-        ScriptVariant_ChangeType(var, VT_STR);
+-        var->strVal = StrCache_CreateNewFrom(tempstr);
+-        break;
+-    }
+-    case _sv_bossescount:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = level->bossescount;
+-        break;
+-    case _sv_maxsoundchannels:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = maxchannels();
+-        break;
+-    case _sv_maxentityvars:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = max_entity_vars;
+-        break;
+-    case _sv_maxindexedvars:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = max_indexed_vars;
+-        break;
+-    case _sv_maxplayers:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = levelsets[current_set].maxplayers;
+-        break;
+-    case _sv_maxscriptvars:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = max_script_vars;
+-        break;
+-    case _sv_models_cached:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = models_cached;
+-        break;
+-    case _sv_models_loaded:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = models_loaded;
+-        break;
+-    case _sv_musicvol:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = savedata.musicvol;
+-        break;
+-    case _sv_nofadeout:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = nofadeout;
+-        break;
+-    case _sv_nojoin:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = nojoin;
+-        break;
+-    case _sv_nopause:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = nopause;
+-        break;
+-    case _sv_nosave:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = nosave;
+-        break;
+-    case _sv_noscreenshot:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = noscreenshot;
+-        break;
+-    case _sv_noshowcomplete:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = levelsets[current_set].noshowcomplete;
+-        break;
+-    case _sv_numbasemaps:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = level->numbasemaps;
+-        break;
+-    case _sv_numbosses:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = level->numbosses;
+-        break;
+-    case _sv_numholes:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = level->numholes;
+-        break;
+-    case _sv_numlayers:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = level->numlayers;
+-        break;
+-    case _sv_numpalettes:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = level->numpalettes;
+-        break;
+-    case _sv_numwalls:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = level->numwalls;
+-        break;
+-    case _sv_pixelformat:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = pixelformat;
+-        break;
+-    case _sv_player:
+-    case _sv_player1:
+-        ScriptVariant_ChangeType(var, VT_PTR);
+-        var->ptrVal = player;
+-        break;
+-    case _sv_player2:
+-        ScriptVariant_ChangeType(var, VT_PTR);
+-        var->ptrVal = player + 1;
+-        break;
+-    case _sv_player3:
+-        ScriptVariant_ChangeType(var, VT_PTR);
+-        var->ptrVal = player + 2;
+-        break;
+-    case _sv_player4:
+-        ScriptVariant_ChangeType(var, VT_PTR);
+-        var->ptrVal = player + 3;
+-        break;
+-    case _sv_player_max_z:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = PLAYER_MAX_Z;
+-        break;
+-    case _sv_player_min_z:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = PLAYER_MIN_Z;
+-        break;
+-    case _sv_lightx:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = light.x;
+-        break;
+-    case _sv_lightz:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = light.y;
+-        break;
+-    case _sv_self:
+-        ScriptVariant_ChangeType(var, VT_PTR);
+-        var->ptrVal = self;
+-        break;
+-    case _sv_shadowalpha:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = shadowalpha;
+-        break;
+-    case _sv_shadowcolor:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = shadowcolor;
+-        break;
+-    case _sv_shadowopacity:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = shadowopacity;
+-        break;
+-    case _sv_skiptoset:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = skiptoset;
+-        break;
+-    case _sv_slowmotion:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = slowmotion.toggle;
+-        break;
+-    case _sv_slowmotion_duration:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = slowmotion.duration;
+-        break;
+-    case _sv_soundvol:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = savedata.soundvol;
+-        break;
+-    case _sv_totalram:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = getSystemRam(KBYTES);
+-        break;
+-    case _sv_freeram:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = getFreeRam(KBYTES);
+-        break;
+-    case _sv_usedram:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = getUsedRam(KBYTES);
+-        break;
+-    case _sv_textbox:
+-        ScriptVariant_ChangeType(var, VT_PTR);
+-        var->ptrVal = textbox;
+-        break;
+-    case _sv_background:
+-        ScriptVariant_ChangeType(var, VT_PTR);
+-        var->ptrVal = background;
+-        break;
+-    case _sv_vscreen:
+-        ScriptVariant_ChangeType(var, VT_PTR);
+-        var->ptrVal = vscreen;
+-        break;
+-    case _sv_viewportx:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = viewportx;
+-        break;
+-    case _sv_viewporty:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = viewporty;
+-        break;
+-    case _sv_viewportw:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = viewportw;
+-        break;
+-    case _sv_viewporth:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = viewporth;
+-        break;
+-    case _sv_scrollminx:
+-        ScriptVariant_ChangeType(var, VT_DECIMAL);
+-        var->dblVal = scrollminx;
+-        break;
+-    case _sv_scrollmaxx:
+-        ScriptVariant_ChangeType(var, VT_DECIMAL);
+-        var->dblVal = scrollmaxx;
+-        break;
+-    case _sv_scrollminz:
+-        ScriptVariant_ChangeType(var, VT_DECIMAL);
+-        var->dblVal = scrollminz;
+-        break;
+-    case _sv_scrollmaxz:
+-        ScriptVariant_ChangeType(var, VT_DECIMAL);
+-        var->dblVal = scrollmaxz;
+-        break;
+-    case _sv_blockade:
+-        ScriptVariant_ChangeType(var, VT_DECIMAL);
+-        var->dblVal = blockade;
+-        break;
+-    case _sv_waiting:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = level ? level->waiting : 0;
+-    case _sv_maxattacktypes:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = max_attack_types;
+-        break;
+-    case _sv_maxanimations:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = max_animations;
+-        break;
+-    case _sv_ticks:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = timer_gettick();
+-        break;
+-    case _sv_nogameover:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = levelsets[current_set].noshowgameover; // or s_set_entry *set = levelsets + current_set;
+-        break;
+-    case _sv_nohof:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = levelsets[current_set].noshowhof;
+-        break;
+-    case _sv_fps:
+-        ScriptVariant_ChangeType(var, VT_INTEGER);
+-        var->lVal = getFPS();
+-        break;
+-    default:
+-        // We use indices now, but players/modders don't need to be exposed
+-        // to that implementation detail, so we write "name" and not "index".
+-        printf("Unknown system property name.\n");
+-        return 0;
+-    }
+-    return 1;
+-}
+-
+-// change a system variant, used by script
+-int changesyspropertybyindex(int index, ScriptVariant *value)
+-{
+-    //char* tempstr = NULL;
+-    LONG ltemp;
+-    DOUBLE dbltemp;
+-
+-    switch(index)
+-    {
+-    case _sv_elapsed_time:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            _time = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_current_stage:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            current_stage = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_current_set:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            current_set = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_current_level:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            current_level = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_game_time:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            timeleft = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_gfx_x_offset:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            gfx_x_offset = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_gfx_y_offset:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            gfx_y_offset = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_gfx_y_offset_adj:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            gfx_y_offset_adj = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_levelpos:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            level->pos = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_xpos:
+-        if(SUCCEEDED(ScriptVariant_DecimalValue(value, &dbltemp)))
+-        {
+-            advancex = (float)dbltemp;
+-        }
+-        break;
+-    case _sv_ypos:
+-        if(SUCCEEDED(ScriptVariant_DecimalValue(value, &dbltemp)))
+-        {
+-            advancey = (DOUBLE)dbltemp;
+-        }
+-        break;
+-    case _sv_scrollminz:
+-        if(SUCCEEDED(ScriptVariant_DecimalValue(value, &dbltemp)))
+-        {
+-            scrollminz = (DOUBLE)dbltemp;
+-        }
+-        break;
+-    case _sv_scrollmaxz:
+-        if(SUCCEEDED(ScriptVariant_DecimalValue(value, &dbltemp)))
+-        {
+-            scrollmaxz = (DOUBLE)dbltemp;
+-        }
+-        break;
+-    case _sv_scrollminx:
+-        if(SUCCEEDED(ScriptVariant_DecimalValue(value, &dbltemp)))
+-        {
+-            scrollminx = (DOUBLE)dbltemp;
+-        }
+-        break;
+-    case _sv_scrollmaxx:
+-        if(SUCCEEDED(ScriptVariant_DecimalValue(value, &dbltemp)))
+-        {
+-            scrollmaxx = (DOUBLE)dbltemp;
+-        }
+-        break;
+-    case _sv_blockade:
+-        if(SUCCEEDED(ScriptVariant_DecimalValue(value, &dbltemp)))
+-        {
+-            blockade = (DOUBLE)dbltemp;
+-        }
+-        break;
+-    case _sv_shadowcolor:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            shadowcolor = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_shadowalpha:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            shadowalpha = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_shadowopacity:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            shadowopacity = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_skiptoset:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            skiptoset = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_slowmotion:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            slowmotion.toggle = (unsigned)ltemp;
+-        }
+-        break;
+-    case _sv_slowmotion_duration:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            slowmotion.duration = (unsigned)ltemp;
+-        }
+-        break;
+-    case _sv_lasthita:
+-    case _sv_lasthity:
+-        if(SUCCEEDED(ScriptVariant_DecimalValue(value, &dbltemp)))
+-        {
+-            lasthit.position.y = (DOUBLE)dbltemp;
+-        }
+-        break;
+-    case _sv_lasthitx:
+-        if(SUCCEEDED(ScriptVariant_DecimalValue(value, &dbltemp)))
+-        {
+-            lasthit.position.x = (DOUBLE)dbltemp;
+-        }
+-        break;
+-    case _sv_lasthitz:
+-        if(SUCCEEDED(ScriptVariant_DecimalValue(value, &dbltemp)))
+-        {
+-            lasthit.position.z = (DOUBLE)dbltemp;
+-        }
+-        break;
+-    case _sv_lasthitc:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            lasthit.confirm = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_lasthitt:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            lasthit.attack->attack_type = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_smartbomber:
+-        smartbomber = (entity *)value->ptrVal;
+-        break;
+-    case _sv_textbox:
+-        textbox = (entity *)value->ptrVal;
+-        break;
+-    case _sv_background:
+-        background = (s_screen *)value->ptrVal;
+-        break;
+-    case _sv_bossescount:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            level->bossescount = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_vscreen:
+-        vscreen = (s_screen *)value->ptrVal;
+-        break;
+-    case _sv_nofadeout:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            nofadeout = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_nojoin:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            nojoin = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_nopause:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            nopause = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_nosave:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            nosave = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_noscreenshot:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            noscreenshot = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_noshowcomplete:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            levelsets[current_set].noshowcomplete = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_numbosses:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            level->numbosses = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_viewportx:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            viewportx = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_viewporty:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            viewporty = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_viewportw:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            viewportw = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_viewporth:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            viewporth = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_waiting:
+-        if(!level)
+-        {
+-            break;
+-        }
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            level->waiting = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_nogameover:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            levelsets[current_set].noshowgameover = (LONG)ltemp;
+-        }
+-        break;
+-    case _sv_nohof:
+-        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
+-        {
+-            levelsets[current_set].noshowhof = (LONG)ltemp;
+-        }
+-        break;
+-    default:
+-        return 0;
+-    }
+-
+-    return 1;
++}
++
++//this method is used by script engine, we move it here
++// it will get a system property, put it in the ScriptVariant
++// if failed return 0, otherwise return 1
++int getsyspropertybyindex(ScriptVariant *var, int index)
++{
++    if(!var)
++    {
++        return 0;
++    }
++
++    switch(index)
++    {
++    case _sv_count_enemies:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = count_ents(TYPE_ENEMY);
++        break;
++    case _sv_count_players:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = count_ents(TYPE_PLAYER);
++        break;
++    case _sv_count_npcs:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = count_ents(TYPE_NPC);
++        break;
++    case _sv_count_entities:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = ent_count;
++        break;
++    case _sv_ent_max:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = ent_max;
++        break;
++    case _sv_in_level:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = (level != NULL);
++        break;
++    case _sv_in_gameoverscreen:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = gameOver;
++        break;
++    case _sv_in_menuscreen:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        if(selectScreen || titleScreen || hallOfFame || gameOver || showComplete || currentScene || level || enginecreditsScreen)
++        {
++            var->lVal = 0;
++        }
++        else
++        {
++            var->lVal = menuScreen;
++        }
++        break;
++    case _sv_in_enginecreditsscreen:
++    		ScriptVariant_ChangeType(var, VT_INTEGER);
++    		var->lVal = enginecreditsScreen;
++    		break;
++    case _sv_in_options:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = optionsMenu;
++        break;
++    case _sv_in_system_options:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = systemoptionsMenu;
++        break;
++    case _sv_in_cheat_options:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = (optionsMenu && is_cheat_actived()) ? 1:0;
++        break;
++    case _sv_cheats:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = is_cheat_actived();
++        break;
++    case _sv_in_control_options:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = controloptionsMenu;
++        break;
++    case _sv_in_sound_options:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = soundoptionsMenu;
++        break;
++    case _sv_in_video_options:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = videooptionsMenu;
++        break;
++    case _sv_in_start_game:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = startgameMenu;
++        break;
++    case _sv_in_new_game:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = newgameMenu;
++        break;
++    case _sv_in_load_game:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = loadgameMenu;
++        break;
++    case _sv_sets_count:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = num_difficulties;
++        break;
++    case _sv_in_showcomplete:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = showComplete;
++        break;
++    case _sv_in_titlescreen:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = titleScreen;
++        break;
++    case _sv_in_halloffamescreen:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = (hallOfFame);
++        break;
++    case _sv_sample_play_id:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = sample_play_id;
++    case _sv_effectvol:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = savedata.effectvol;
++        break;
++    case _sv_elapsed_time:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = _time;
++        break;
++    case _sv_game_speed:
++        if(!level)
++        {
++            return 0;
++        }
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = GAME_SPEED;
++        break;
++    case _sv_game_paused:
++    case _sv_pause:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        if( !(goto_mainmenu_flag&1) ) var->lVal = (_pause);
++        else var->lVal = 0;
++        break;
++    case _sv_game_time:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = timeleft;
++        break;
++    case _sv_porting:
++    {
++        e_porting porting;
++
++        #if ANDROID
++            porting = PORTING_ANDROID;
++        #elif DARWIN
++            porting = PORTING_DARWIN;
++        #elif DC
++            porting = PORTING_DREAMCAST;
++        #elif GPX2
++            porting = PORTING_GPX2;
++        #elif LINUX
++            porting = PORTING_LINUX;
++        #elif OPENDINGUX
++            porting = PORTING_OPENDINGUX;
++        #elif PSP
++            porting = PORTING_PSP;
++        #elif WII
++            porting = PORTING_WII;
++        #elif WIN
++            porting = PORTING_WINDOWS;
++        #elif WIZ
++            porting = PORTING_WIZ;
++        #elif XBOX
++            porting = PORTING_XBOX;
++        #elif VITA
++            porting = PORTING_VITA;
++        #else
++            porting = PORTING_UNKNOWN;
++        #endif
++
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = porting;
++        break;
++    }
++    case _sv_gfx_x_offset:
++        if(!level)
++        {
++            return 0;
++        }
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = gfx_x_offset;
++        break;
++    case _sv_gfx_y_offset:
++        if(!level)
++        {
++            return 0;
++        }
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = gfx_y_offset;
++        break;
++    case _sv_gfx_y_offset_adj:
++        if(!level)
++        {
++            return 0;
++        }
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = gfx_y_offset_adj;
++        break;
++    case _sv_in_selectscreen:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        //var->lVal = selectScreen;
++        var->lVal = finisheds_games_count;
++	break;
++    case _sv_lasthita:
++    case _sv_lasthity:
++        ScriptVariant_ChangeType(var, VT_DECIMAL);
++        var->dblVal = lasthit.position.y;
++        break;
++    case _sv_lasthitc:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = lasthit.confirm;
++        break;
++    case _sv_lasthitt:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++
++        if(lasthit.attack)
++        {
++            var->lVal = lasthit.attack->attack_type;
++        }
++
++        break;
++    case _sv_lasthitx:
++        ScriptVariant_ChangeType(var, VT_DECIMAL);
++        var->dblVal = lasthit.position.x;
++        break;
++    case _sv_lasthitz:
++        ScriptVariant_ChangeType(var, VT_DECIMAL);
++        var->dblVal = lasthit.position.z;
++        break;
++    case _sv_xpos:
++        if(!level)
++        {
++            return 0;
++        }
++        ScriptVariant_ChangeType(var, VT_DECIMAL);
++        var->dblVal = advancex;
++        break;
++    case _sv_ypos:
++        if(!level)
++        {
++            return 0;
++        }
++        ScriptVariant_ChangeType(var, VT_DECIMAL);
++        var->dblVal = advancey;
++        break;
++    case _sv_hresolution:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = videomodes.hRes;
++        //var->lVal = finisheds_games_count;
++	break;
++    case _sv_vresolution:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = videomodes.vRes;
++        break;
++    case _sv_current_scene:
++        if(currentScene)
++        {
++            ScriptVariant_ChangeType(var, VT_STR);
++            var->strVal = StrCache_CreateNewFrom(currentScene);
++        }
++        else
++        {
++            ScriptVariant_Clear(var);
++        }
++        break;
++    case _sv_current_set:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = current_set;
++        break;
++    case _sv_current_level:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = current_level;
++        break;
++    case _sv_current_palette:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = current_palette;
++        break;
++    case _sv_current_stage:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = current_stage;
++        break;
++    case _sv_levelwidth:
++        if(!level)
++        {
++            return 0;
++        }
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = level->width;
++        break;
++    case _sv_levelheight:
++        if(!level)
++        {
++            return 0;
++        }
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = panel_height;
++        break;
++    case _sv_branchname:
++        ScriptVariant_ChangeType(var, VT_STR);
++        var->strVal = StrCache_CreateNewFrom(branch_name);
++        break;
++    case _sv_current_branch:
++        if(level != NULL && levelsets && levelsets[current_set].levelorder && levelsets[current_set].levelorder[current_level].branchname)
++        {
++            ScriptVariant_ChangeType(var, VT_STR);
++            var->strVal = StrCache_CreateNewFrom(levelsets[current_set].levelorder[current_level].branchname);
++        }
++        else
++        {
++            ScriptVariant_Clear(var);
++        }
++        break;
++    case _sv_pakname:
++    {
++        char tempstr[MAX_BUFFER_LEN];
++        getPakName(tempstr, -1);
++        ScriptVariant_ChangeType(var, VT_STR);
++        var->strVal = StrCache_CreateNewFrom(tempstr);
++        break;
++    }
++    case _sv_bossescount:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = level->bossescount;
++        break;
++    case _sv_maxsoundchannels:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = maxchannels();
++        break;
++    case _sv_maxentityvars:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = max_entity_vars;
++        break;
++    case _sv_maxindexedvars:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = max_indexed_vars;
++        break;
++    case _sv_maxplayers:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = levelsets[current_set].maxplayers;
++        break;
++    case _sv_maxscriptvars:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = max_script_vars;
++        break;
++    case _sv_models_cached:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = models_cached;
++        break;
++    case _sv_models_loaded:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = models_loaded;
++        break;
++    case _sv_musicvol:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = savedata.musicvol;
++        break;
++    case _sv_nofadeout:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = nofadeout;
++        break;
++    case _sv_nojoin:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = nojoin;
++        break;
++    case _sv_nopause:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = nopause;
++        break;
++    case _sv_nosave:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = nosave;
++        break;
++    case _sv_noscreenshot:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = noscreenshot;
++        break;
++    case _sv_noshowcomplete:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = levelsets[current_set].noshowcomplete;
++        break;
++    case _sv_numbasemaps:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = level->numbasemaps;
++        break;
++    case _sv_numbosses:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = level->numbosses;
++        break;
++    case _sv_numholes:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = level->numholes;
++        break;
++    case _sv_numlayers:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = level->numlayers;
++        break;
++    case _sv_numpalettes:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = level->numpalettes;
++        break;
++    case _sv_numwalls:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = level->numwalls;
++        break;
++    case _sv_pixelformat:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = pixelformat;
++        break;
++    case _sv_player:
++    case _sv_player1:
++        ScriptVariant_ChangeType(var, VT_PTR);
++        var->ptrVal = player;
++        break;
++    case _sv_player2:
++        ScriptVariant_ChangeType(var, VT_PTR);
++        var->ptrVal = player + 1;
++        break;
++    case _sv_player3:
++        ScriptVariant_ChangeType(var, VT_PTR);
++        var->ptrVal = player + 2;
++        break;
++    case _sv_player4:
++        ScriptVariant_ChangeType(var, VT_PTR);
++        var->ptrVal = player + 3;
++        break;
++    case _sv_player_max_z:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = PLAYER_MAX_Z;
++        break;
++    case _sv_player_min_z:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = PLAYER_MIN_Z;
++        break;
++    case _sv_lightx:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = light.x;
++        break;
++    case _sv_lightz:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = light.y;
++        break;
++    case _sv_self:
++        ScriptVariant_ChangeType(var, VT_PTR);
++        var->ptrVal = self;
++        break;
++    case _sv_shadowalpha:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = shadowalpha;
++        break;
++    case _sv_shadowcolor:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = shadowcolor;
++        break;
++    case _sv_shadowopacity:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = shadowopacity;
++        break;
++    case _sv_skiptoset:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = skiptoset;
++        break;
++    case _sv_slowmotion:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = slowmotion.toggle;
++        break;
++    case _sv_slowmotion_duration:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = slowmotion.duration;
++        break;
++    case _sv_soundvol:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = savedata.soundvol;
++        break;
++    case _sv_totalram:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = getSystemRam(KBYTES);
++        break;
++    case _sv_freeram:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = getFreeRam(KBYTES);
++        break;
++    case _sv_usedram:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = getUsedRam(KBYTES);
++        break;
++    case _sv_textbox:
++        ScriptVariant_ChangeType(var, VT_PTR);
++        var->ptrVal = textbox;
++        break;
++    case _sv_background:
++        ScriptVariant_ChangeType(var, VT_PTR);
++        var->ptrVal = background;
++        break;
++    case _sv_vscreen:
++        ScriptVariant_ChangeType(var, VT_PTR);
++        var->ptrVal = vscreen;
++        break;
++    case _sv_viewportx:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = viewportx;
++        break;
++    case _sv_viewporty:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = viewporty;
++        break;
++    case _sv_viewportw:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = viewportw;
++        break;
++    case _sv_viewporth:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = viewporth;
++        break;
++    case _sv_scrollminx:
++        ScriptVariant_ChangeType(var, VT_DECIMAL);
++        var->dblVal = scrollminx;
++        break;
++    case _sv_scrollmaxx:
++        ScriptVariant_ChangeType(var, VT_DECIMAL);
++        var->dblVal = scrollmaxx;
++        break;
++    case _sv_scrollminz:
++        ScriptVariant_ChangeType(var, VT_DECIMAL);
++        var->dblVal = scrollminz;
++        break;
++    case _sv_scrollmaxz:
++        ScriptVariant_ChangeType(var, VT_DECIMAL);
++        var->dblVal = scrollmaxz;
++        break;
++    case _sv_blockade:
++        ScriptVariant_ChangeType(var, VT_DECIMAL);
++        var->dblVal = blockade;
++        break;
++    case _sv_waiting:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = level ? level->waiting : 0;
++    case _sv_maxattacktypes:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = max_attack_types;
++        break;
++    case _sv_maxanimations:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = max_animations;
++        break;
++    case _sv_ticks:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = timer_gettick();
++        break;
++    case _sv_nogameover:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = levelsets[current_set].noshowgameover; // or s_set_entry *set = levelsets + current_set;
++        break;
++    case _sv_nohof:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = levelsets[current_set].noshowhof;
++        break;
++    case _sv_fps:
++        ScriptVariant_ChangeType(var, VT_INTEGER);
++        var->lVal = getFPS();
++        break;
++    default:
++        // We use indices now, but players/modders don't need to be exposed
++        // to that implementation detail, so we write "name" and not "index".
++        printf("Unknown system property name.\n");
++        return 0;
++    }
++    return 1;
++}
++
++// change a system variant, used by script
++int changesyspropertybyindex(int index, ScriptVariant *value)
++{
++    //char* tempstr = NULL;
++    LONG ltemp;
++    DOUBLE dbltemp;
++
++    switch(index)
++    {
++    case _sv_elapsed_time:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            _time = (LONG)ltemp;
++        }
++        break;
++    case _sv_current_stage:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            current_stage = (LONG)ltemp;
++        }
++        break;
++    case _sv_current_set:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            current_set = (LONG)ltemp;
++        }
++        break;
++    case _sv_current_level:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            current_level = (LONG)ltemp;
++        }
++        break;
++    case _sv_game_time:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            timeleft = (LONG)ltemp;
++        }
++        break;
++    case _sv_gfx_x_offset:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            gfx_x_offset = (LONG)ltemp;
++        }
++        break;
++    case _sv_gfx_y_offset:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            gfx_y_offset = (LONG)ltemp;
++        }
++        break;
++    case _sv_gfx_y_offset_adj:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            gfx_y_offset_adj = (LONG)ltemp;
++        }
++        break;
++    case _sv_levelpos:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            level->pos = (LONG)ltemp;
++        }
++        break;
++    case _sv_xpos:
++        if(SUCCEEDED(ScriptVariant_DecimalValue(value, &dbltemp)))
++        {
++            advancex = (float)dbltemp;
++        }
++        break;
++    case _sv_ypos:
++        if(SUCCEEDED(ScriptVariant_DecimalValue(value, &dbltemp)))
++        {
++            advancey = (DOUBLE)dbltemp;
++        }
++        break;
++    case _sv_scrollminz:
++        if(SUCCEEDED(ScriptVariant_DecimalValue(value, &dbltemp)))
++        {
++            scrollminz = (DOUBLE)dbltemp;
++        }
++        break;
++    case _sv_scrollmaxz:
++        if(SUCCEEDED(ScriptVariant_DecimalValue(value, &dbltemp)))
++        {
++            scrollmaxz = (DOUBLE)dbltemp;
++        }
++        break;
++    case _sv_scrollminx:
++        if(SUCCEEDED(ScriptVariant_DecimalValue(value, &dbltemp)))
++        {
++            scrollminx = (DOUBLE)dbltemp;
++        }
++        break;
++    case _sv_scrollmaxx:
++        if(SUCCEEDED(ScriptVariant_DecimalValue(value, &dbltemp)))
++        {
++            scrollmaxx = (DOUBLE)dbltemp;
++        }
++        break;
++    case _sv_blockade:
++        if(SUCCEEDED(ScriptVariant_DecimalValue(value, &dbltemp)))
++        {
++            blockade = (DOUBLE)dbltemp;
++        }
++        break;
++    case _sv_shadowcolor:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            shadowcolor = (LONG)ltemp;
++        }
++        break;
++    case _sv_shadowalpha:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            shadowalpha = (LONG)ltemp;
++        }
++        break;
++    case _sv_shadowopacity:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            shadowopacity = (LONG)ltemp;
++        }
++        break;
++    case _sv_skiptoset:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            skiptoset = (LONG)ltemp;
++        }
++        break;
++    case _sv_slowmotion:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            slowmotion.toggle = (unsigned)ltemp;
++        }
++        break;
++    case _sv_slowmotion_duration:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            slowmotion.duration = (unsigned)ltemp;
++        }
++        break;
++    case _sv_lasthita:
++    case _sv_lasthity:
++        if(SUCCEEDED(ScriptVariant_DecimalValue(value, &dbltemp)))
++        {
++            lasthit.position.y = (DOUBLE)dbltemp;
++        }
++        break;
++    case _sv_lasthitx:
++        if(SUCCEEDED(ScriptVariant_DecimalValue(value, &dbltemp)))
++        {
++            lasthit.position.x = (DOUBLE)dbltemp;
++        }
++        break;
++    case _sv_lasthitz:
++        if(SUCCEEDED(ScriptVariant_DecimalValue(value, &dbltemp)))
++        {
++            lasthit.position.z = (DOUBLE)dbltemp;
++        }
++        break;
++    case _sv_lasthitc:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            lasthit.confirm = (LONG)ltemp;
++        }
++        break;
++    case _sv_lasthitt:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            lasthit.attack->attack_type = (LONG)ltemp;
++        }
++        break;
++    case _sv_smartbomber:
++        smartbomber = (entity *)value->ptrVal;
++        break;
++    case _sv_textbox:
++        textbox = (entity *)value->ptrVal;
++        break;
++    case _sv_background:
++        background = (s_screen *)value->ptrVal;
++        break;
++    case _sv_bossescount:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            level->bossescount = (LONG)ltemp;
++        }
++        break;
++    case _sv_vscreen:
++        vscreen = (s_screen *)value->ptrVal;
++        break;
++    case _sv_nofadeout:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            nofadeout = (LONG)ltemp;
++        }
++        break;
++    case _sv_nojoin:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            nojoin = (LONG)ltemp;
++        }
++        break;
++    case _sv_nopause:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            nopause = (LONG)ltemp;
++        }
++        break;
++    case _sv_nosave:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            nosave = (LONG)ltemp;
++        }
++        break;
++    case _sv_noscreenshot:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            noscreenshot = (LONG)ltemp;
++        }
++        break;
++    case _sv_noshowcomplete:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            levelsets[current_set].noshowcomplete = (LONG)ltemp;
++        }
++        break;
++    case _sv_numbosses:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            level->numbosses = (LONG)ltemp;
++        }
++        break;
++    case _sv_viewportx:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            viewportx = (LONG)ltemp;
++        }
++        break;
++    case _sv_viewporty:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            viewporty = (LONG)ltemp;
++        }
++        break;
++    case _sv_viewportw:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            viewportw = (LONG)ltemp;
++        }
++        break;
++    case _sv_viewporth:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            viewporth = (LONG)ltemp;
++        }
++        break;
++    case _sv_waiting:
++        if(!level)
++        {
++            break;
++        }
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            level->waiting = (LONG)ltemp;
++        }
++        break;
++    case _sv_nogameover:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            levelsets[current_set].noshowgameover = (LONG)ltemp;
++        }
++        break;
++    case _sv_nohof:
++        if(SUCCEEDED(ScriptVariant_IntegerValue(value, &ltemp)))
++        {
++            levelsets[current_set].noshowhof = (LONG)ltemp;
++        }
++        break;
++    default:
++        return 0;
++    }
++
++    return 1;
+ }
+ 
+ //checkhole(x,z,a), return 1 if there's hole here
+@@ -9117,14 +9121,14 @@ HRESULT openbor_checkholeindex(ScriptVariant **varlist , ScriptVariant **pretvar
+     }
+ 
+     return S_OK;
+-}
+-
++}
++
+ //checkbase(x,z,y,entity), return base of terrain. -1 if there is a wall and no platform. entity param is optional.
+-HRESULT openbor_checkbase(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount)
+-{
++HRESULT openbor_checkbase(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount)
++{
+     ScriptVariant *arg = NULL;
+-    DOUBLE x, z, y;
+-    entity *ent = NULL;
++    DOUBLE x, z, y;
++    entity *ent = NULL;
+     float base = -1.0f;
+ 
+     if(paramCount < 3)
+@@ -9146,8 +9150,8 @@ HRESULT openbor_checkbase(ScriptVariant **varlist , ScriptVariant **pretvar, int
+     if(FAILED(ScriptVariant_DecimalValue(arg, &z)))
+     {
+         return S_OK;
+-    }
+-
++    }
++
+     arg = varlist[2];
+     if(FAILED(ScriptVariant_DecimalValue(arg, &y)))
+     {
+@@ -9157,12 +9161,12 @@ HRESULT openbor_checkbase(ScriptVariant **varlist , ScriptVariant **pretvar, int
+     if (paramCount > 3)
+     {
+         arg = varlist[3];
+-        /*if(arg->vt != VT_PTR && arg->vt != VT_EMPTY)
+-        {
+-            printf("Function checkbase must have a valid entity handle or NULL().\n");
+-            *pretvar = NULL;
+-            return E_FAIL;
+-        }*/
++        /*if(arg->vt != VT_PTR && arg->vt != VT_EMPTY)
++        {
++            printf("Function checkbase must have a valid entity handle or NULL().\n");
++            *pretvar = NULL;
++            return E_FAIL;
++        }*/
+         ent = (entity *)arg->ptrVal; //retrieve the entity
+     }
+ 
+@@ -9170,7 +9174,7 @@ HRESULT openbor_checkbase(ScriptVariant **varlist , ScriptVariant **pretvar, int
+     {
+         (*pretvar)->dblVal = (DOUBLE)base;
+     }
+-    return S_OK;
++    return S_OK;
+ }
+ 
+ //checkwall(x,z), return wall height, or 0 | accept checkwall_index(x,z,y) too
+@@ -10141,15 +10145,15 @@ HRESULT openbor_damageentity(ScriptVariant **varlist , ScriptVariant **pretvar,
+ de_error:
+     *pretvar = NULL;
+     return E_FAIL;
+-}
+-
++}
++
+ //getcomputeddamage(defender, attacker, force, drop, type), it returns the real damage. Minimum 3 params (defender, attacker, force)
+-HRESULT openbor_getcomputeddamage(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount)
+-{
++HRESULT openbor_getcomputeddamage(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount)
++{
+     entity *defender = NULL;
+-    entity *attacker = NULL;
+-    entity *temp = NULL;
+-    LONG force, drop, type;
++    entity *attacker = NULL;
++    entity *temp = NULL;
++    LONG force, drop, type;
+     s_collision_attack atk;
+ 
+     if(paramCount < 3)
+@@ -10159,8 +10163,8 @@ HRESULT openbor_getcomputeddamage(ScriptVariant **varlist , ScriptVariant **pret
+     }
+ 
+     ScriptVariant_ChangeType(*pretvar, VT_INTEGER);
+-    (*pretvar)->lVal = (LONG)0;
+-
++    (*pretvar)->lVal = (LONG)0;
++
+     force = (LONG)0;
+     drop = (LONG)0;
+     type = (LONG)ATK_NORMAL;
+@@ -10181,8 +10185,8 @@ HRESULT openbor_getcomputeddamage(ScriptVariant **varlist , ScriptVariant **pret
+     {
+         printf("Wrong force value.\n");
+         goto gcd_error;
+-    }
+-
++    }
++
+     if(paramCount >= 4)
+     {
+         if(FAILED(ScriptVariant_IntegerValue((varlist[3]), &drop)))
+@@ -10198,8 +10202,8 @@ HRESULT openbor_getcomputeddamage(ScriptVariant **varlist , ScriptVariant **pret
+             printf("Wrong type value.\n");
+             goto gcd_error;
+         }
+-    }
+-
++    }
++
+     atk = emptyattack;
+     atk.attack_force = force;
+     atk.attack_drop = drop;
+@@ -10209,18 +10213,18 @@ HRESULT openbor_getcomputeddamage(ScriptVariant **varlist , ScriptVariant **pret
+         atk.dropv.x = (float)DEFAULT_ATK_DROPV_X;
+         atk.dropv.z = (float)DEFAULT_ATK_DROPV_Z;
+     }
+-    atk.attack_type = type;
+-
++    atk.attack_type = type;
++
+     temp = self;
+-    self = defender;
+-    (*pretvar)->lVal = (LONG)calculate_force_damage(attacker, &atk);
++    self = defender;
++    (*pretvar)->lVal = (LONG)calculate_force_damage(attacker, &atk);
+     self = temp;
+ 
+     return S_OK;
+ 
+ gcd_error:
+     *pretvar = NULL;
+-    return E_FAIL;
++    return E_FAIL;
+ }
+ 
+ //killentity(entity)
+@@ -10863,7 +10867,7 @@ HRESULT openbor_spawn(ScriptVariant **varlist , ScriptVariant **pretvar, int par
+ 
+     if(spawnentry.boss && level)
+     {
+-        level->bossescount++;
++        level->bossescount++;
+         level->numbosses++;
+     }
+ 
+@@ -10962,20 +10966,20 @@ HRESULT openbor_projectile(ScriptVariant **varlist , ScriptVariant **pretvar, in
+         direction = self->direction;
+     }
+     if(paramCount >= 6 && SUCCEEDED(ScriptVariant_IntegerValue(varlist[5], &ltemp)))
+-    {
+-
+-        // Backwards compatibility for modules made before bitwise update
+-        // of projectile_prime and expect base vs. floor and moving
+-        // behavior to both be tied to a single 0 or 1 value.
+-        if((LONG)ltemp)
+-        {
+-            projectile_prime = PROJECTILE_PRIME_BASE_FLOOR;
+-            projectile_prime += PROJECTILE_PRIME_LAUNCH_STATIONARY;
+-        }
+-        else
+-        {
+-            projectile_prime = PROJECTILE_PRIME_BASE_Y;
+-            projectile_prime += PROJECTILE_PRIME_LAUNCH_MOVING;
++    {
++
++        // Backwards compatibility for modules made before bitwise update
++        // of projectile_prime and expect base vs. floor and moving
++        // behavior to both be tied to a single 0 or 1 value.
++        if((LONG)ltemp)
++        {
++            projectile_prime = PROJECTILE_PRIME_BASE_FLOOR;
++            projectile_prime += PROJECTILE_PRIME_LAUNCH_STATIONARY;
++        }
++        else
++        {
++            projectile_prime = PROJECTILE_PRIME_BASE_Y;
++            projectile_prime += PROJECTILE_PRIME_LAUNCH_MOVING;
+         }
+     }
+     if(paramCount >= 7 && SUCCEEDED(ScriptVariant_IntegerValue(varlist[6], &ltemp)))
+@@ -11385,7 +11389,7 @@ HRESULT openbor_pausesamples(ScriptVariant **varlist , ScriptVariant **pretvar,
+ //pausesample(toggle,channel)
+ HRESULT openbor_pausesample(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount)
+ {
+-    int pause = 0;
++    int pause = 0;
+     LONG channel = 0;
+     if(paramCount < 2)
+     {
+@@ -13965,10 +13969,10 @@ HRESULT openbor_executeanimation(ScriptVariant **varlist , ScriptVariant **pretv
+     e->idling = IDLING_INACTIVE;
+     e->drop = 0;
+     e->falling = 0;
+-    e->inpain = 0;
+-    e->rising = 0;
+-    e->riseattacking = 0;
+-    e->edge = EDGE_NO;
++    e->inpain = 0;
++    e->rising = 0;
++    e->riseattacking = 0;
++    e->edge = EDGE_NO;
+     e->ducking = DUCK_INACTIVE;
+     e->inbackpain = 0;
+     e->blocking = 0;
+@@ -14030,9 +14034,9 @@ HRESULT openbor_performattack(ScriptVariant **varlist , ScriptVariant **pretvar,
+     e->idling = IDLING_INACTIVE;
+     e->drop = 0;
+     e->falling = 0;
+-    e->inpain = 0;
+-    e->rising = 0;
+-    e->riseattacking = 0;
++    e->inpain = 0;
++    e->rising = 0;
++    e->riseattacking = 0;
+     e->edge = EDGE_NO;
+     e->inbackpain = 0;
+     e->blocking = 0;
+@@ -14095,10 +14099,10 @@ HRESULT openbor_setidle(ScriptVariant **varlist , ScriptVariant **pretvar, int p
+     e->idling = 1;
+     e->drop = 0;
+     e->falling = 0;
+-    e->inpain = 0;
+-    e->rising = 0;
+-    e->riseattacking = 0;
+-    e->edge = EDGE_NO;
++    e->inpain = 0;
++    e->rising = 0;
++    e->riseattacking = 0;
++    e->edge = EDGE_NO;
+     e->ducking = DUCK_INACTIVE;
+     e->inbackpain = 0;
+     e->blocking = 0;
+@@ -15208,8 +15212,8 @@ HRESULT openbor_finishlevel(ScriptVariant **varlist , ScriptVariant **pretvar, i
+     *pretvar = NULL;
+     level->force_finishlevel = 1;
+     return S_OK;
+-}
+-
++}
++
+ //gameover()
+ HRESULT openbor_gameover(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount)
+ {
+diff --git a/engine/sdl/control.c b/engine/sdl/control.c
+index 33bb4ac3..d08f0bc1 100644
+--- a/engine/sdl/control.c
++++ b/engine/sdl/control.c
+@@ -6,7 +6,7 @@
+  * Copyright (c) 2004 - 2014 OpenBOR Team
+  */
+ 
+-// Generic control stuff (keyboard+joystick)
++// Generic control stuff (keyboard+joystick)
+ 
+ #include "video.h"
+ #include "globals.h"
+@@ -14,11 +14,11 @@
+ #include "stristr.h"
+ #include "sblaster.h"
+ #include "joysticks.h"
+-#include "openbor.h"
+-
++#include "openbor.h"
++
+ #define T_AXIS 7000
+ 
+-SDL_Joystick *joystick[JOY_LIST_TOTAL];         // SDL struct for joysticks
++SDL_Joystick *joystick[JOY_LIST_TOTAL];         // SDL struct for joysticks
+ SDL_Haptic *joystick_haptic[JOY_LIST_TOTAL];   // SDL haptic for joysticks
+ static int usejoy;						        // To be or Not to be used?
+ static int numjoy;						        // Number of Joy(s) found
+@@ -26,13 +26,13 @@ static int lastkey;						        // Last keyboard key Pressed
+ static int lastjoy;                             // Last joystick button/axis/hat input
+ 
+ int sdl_game_started  = 0;
+-
+-extern int default_keys[MAX_BTN_NUM];
+-extern s_playercontrols default_control;
++
++extern int default_keys[MAX_BTN_NUM];
++extern s_playercontrols default_control;
+ 
+ #ifdef ANDROID
+ extern int nativeWidth;
+-extern int nativeHeight;
++extern int nativeHeight;
+ static TouchStatus touch_info;
+ #endif
+ 
+@@ -43,7 +43,7 @@ up to 4 controllers.
+ */
+ void getPads(Uint8* keystate, Uint8* keystate_def)
+ {
+-	int i, j, x, axis;
++	int i, j, axis;
+ 	SDL_Event ev;
+ 	while(SDL_PollEvent(&ev))
+ 	{
+@@ -76,7 +76,7 @@ void getPads(Uint8* keystate, Uint8* keystate_def)
+ 					{
+ 						touch_info.pid[i] = ev.tfinger.fingerId;
+ 						touch_info.px[i] = ev.tfinger.x*nativeWidth;
+-						touch_info.py[i] = ev.tfinger.y*nativeHeight;
++						touch_info.py[i] = ev.tfinger.y*nativeHeight;
+ 						touch_info.pstatus[i] = TOUCH_STATUS_DOWN;
+ 						break;
+ 					}
+@@ -89,7 +89,7 @@ void getPads(Uint8* keystate, Uint8* keystate_def)
+ 				for(i=0; i<MAX_POINTERS; i++)
+ 				{
+ 					if(touch_info.pid[i] == ev.tfinger.fingerId)
+-					{
++					{
+ 						touch_info.pstatus[i] = TOUCH_STATUS_UP;
+ 						break;
+ 					}
+@@ -104,7 +104,7 @@ void getPads(Uint8* keystate, Uint8* keystate_def)
+ 					if(touch_info.pid[i] == ev.tfinger.fingerId)
+ 					{
+ 						touch_info.px[i] = ev.tfinger.x*nativeWidth;
+-						touch_info.py[i] = ev.tfinger.y*nativeHeight;
++						touch_info.py[i] = ev.tfinger.y*nativeHeight;
+ 						touch_info.pstatus[i] = TOUCH_STATUS_DOWN;
+ 						break;
+ 					}
+@@ -119,7 +119,7 @@ void getPads(Uint8* keystate, Uint8* keystate_def)
+ 			case SDL_WINDOWEVENT:
+ 				if(ev.window.event==SDL_WINDOWEVENT_MINIMIZED)
+ 				{
+-					//SDL_PauseAudio(1);
++					//SDL_PauseAudio(1);
+ 					SDL_PauseAudioDevice(audio_dev, 1);
+ 					while(true)
+ 					{
+@@ -127,7 +127,7 @@ void getPads(Uint8* keystate, Uint8* keystate_def)
+ 						{
+ 							if(ev.type==SDL_WINDOWEVENT && ev.window.event==SDL_WINDOWEVENT_RESTORED)
+ 							{
+-								//SDL_PauseAudio(0);
++								//SDL_PauseAudio(0);
+ 								SDL_PauseAudioDevice(audio_dev, 0);
+ 								extern s_videomodes videomodes;
+ 								video_set_mode(videomodes);
+@@ -145,7 +145,8 @@ void getPads(Uint8* keystate, Uint8* keystate_def)
+ 			case SDL_QUIT:
+ 				borShutdown(0, DEFAULT_SHUTDOWN_MESSAGE);
+ 				break;
+-
++				
++			/*
+ 			case SDL_JOYBUTTONUP:
+ 				for(i=0; i<JOY_LIST_TOTAL; i++)
+ 				{
+@@ -158,112 +159,128 @@ void getPads(Uint8* keystate, Uint8* keystate_def)
+ 							if(ev.jbutton.button == 4 || ev.jbutton.button == 3 || ev.jbutton.button == 5) joysticks[i].Hats &= ~(JoystickBits[3]);
+ 							if(ev.jbutton.button == 2 || ev.jbutton.button == 1 || ev.jbutton.button == 3) joysticks[i].Hats &= ~(JoystickBits[4]);
+ 							if(ev.jbutton.button >= 8 && ev.jbutton.button <= 18) joysticks[i].Buttons &= ~(JoystickBits[ev.jbutton.button - 3]);
+-						}
+-						/*else
+-                        {
+-                            // add key flag from event
+-                            #ifdef ANDROID
+-                            joysticks[i].Buttons &= 0x00 << ev.jbutton.button;
+-                            #endif
++						}
++						//else
++                        {
++                            // add key flag from event
++                            #ifdef ANDROID
++                            joysticks[i].Buttons &= 0x00 << ev.jbutton.button;
++                            #endif
+                         }*/
++			/*
+ 					}
+ 				}
+ 				break;
+-
++			*/
++			/*
+ 			case SDL_JOYBUTTONDOWN:
+ 				// FIXME: restore GP2X controls
++				
++				//lastjoy = 1 + ev.jbutton.which * JOY_MAX_INPUTS + ev.jbutton.button;
++				
++				
+ 				for(i=0; i<JOY_LIST_TOTAL; i++)
+ 				{
+ 					if(ev.jbutton.which == i)
+ 					{
+-						lastjoy = 1 + i * JOY_MAX_INPUTS + ev.jbutton.button;
+-
+-						// add key flag from event
+-						/*#ifdef ANDROID
+-						joysticks[i].Buttons |= 0x01 << ev.jbutton.button;
+-						#endif*/
++						
++						//lastjoy = 1 + (SDL_NumJoysticks()- 1 - i) * JOY_MAX_INPUTS + ev.jbutton.button;
++						lastjoy = 1 + i * JOY_MAX_INPUTS + ev.jbutton.button;
++						// add key flag from event
++						//#ifdef ANDROID
++						//joysticks[i].Buttons |= 0x01 << ev.jbutton.button;
++						//#endif
+ 					}
+ 				}
+ 				break;
+-
++				*/
++			/*
+ 			case SDL_JOYHATMOTION:
++				
+ 				for(i=0; i<JOY_LIST_TOTAL; i++)
+ 				{
+ 					if(ev.jhat.which == i)
+ 					{
+ 						int hatfirst = 1 + i * JOY_MAX_INPUTS + joysticks[i].NumButtons + 2*joysticks[i].NumAxes + 4*ev.jhat.hat;
++						//int hatfirst = 1 + (SDL_NumJoysticks()- 1 - i) * JOY_MAX_INPUTS + joysticks[i].NumButtons + 2*joysticks[i].NumAxes + 4*ev.jhat.hat;
+ 						x = (joysticks[i].Hats >> (4*ev.jhat.hat)) & 0x0F; // hat's previous state
+ 						if(ev.jhat.value & SDL_HAT_UP       && !(x & SDL_HAT_UP))       lastjoy = hatfirst;
+ 						if(ev.jhat.value & SDL_HAT_RIGHT    && !(x & SDL_HAT_RIGHT))	lastjoy = hatfirst + 1;
+ 						if(ev.jhat.value & SDL_HAT_DOWN     && !(x & SDL_HAT_DOWN))	    lastjoy = hatfirst + 2;
+ 						if(ev.jhat.value & SDL_HAT_LEFT     && !(x & SDL_HAT_LEFT))	    lastjoy = hatfirst + 3;
+-						//if(lastjoy) fprintf(stderr, "SDL_JOYHATMOTION - Joystick %i Hat %i (Index %i)\n", i, ev.jhat.hat, lastjoy);
+-
+-						// add key flag from event (0x01 0x02 0x04 0x08)
+-						#ifdef ANDROID
+-						if(ev.jhat.value & SDL_HAT_UP)      joysticks[i].Hats |= SDL_HAT_UP         << (ev.jhat.hat*4);
+-						if(ev.jhat.value & SDL_HAT_RIGHT)   joysticks[i].Hats |= SDL_HAT_RIGHT      << (ev.jhat.hat*4);
+-						if(ev.jhat.value & SDL_HAT_DOWN)    joysticks[i].Hats |= SDL_HAT_DOWN       << (ev.jhat.hat*4);
+-						if(ev.jhat.value & SDL_HAT_LEFT)    joysticks[i].Hats |= SDL_HAT_LEFT       << (ev.jhat.hat*4);
++						//if(lastjoy) fprintf(stderr, "SDL_JOYHATMOTION - Joystick %i Hat %i (Index %i)\n", i, ev.jhat.hat, lastjoy);
++
++						// add key flag from event (0x01 0x02 0x04 0x08)
++						#ifdef ANDROID
++						if(ev.jhat.value & SDL_HAT_UP)      joysticks[i].Hats |= SDL_HAT_UP         << (ev.jhat.hat*4);
++						if(ev.jhat.value & SDL_HAT_RIGHT)   joysticks[i].Hats |= SDL_HAT_RIGHT      << (ev.jhat.hat*4);
++						if(ev.jhat.value & SDL_HAT_DOWN)    joysticks[i].Hats |= SDL_HAT_DOWN       << (ev.jhat.hat*4);
++						if(ev.jhat.value & SDL_HAT_LEFT)    joysticks[i].Hats |= SDL_HAT_LEFT       << (ev.jhat.hat*4);
+ 						#endif
+ 					}
+ 				}
+ 				break;
+-
++				*/
++			/*
+ 			case SDL_JOYAXISMOTION:
++			
+ 				for(i=0; i<JOY_LIST_TOTAL; i++)
+ 				{
+ 					if(ev.jaxis.which == i)
+ 					{
+ 						int axisfirst = 1 + i * JOY_MAX_INPUTS + joysticks[i].NumButtons + 2*ev.jaxis.axis;
++						//int axisfirst = 1 + (SDL_NumJoysticks()- 1 - i) * JOY_MAX_INPUTS + joysticks[i].NumButtons + 2*ev.jaxis.axis;
+ 						x = (joysticks[i].Axes >> (2*ev.jaxis.axis)) & 0x03; // previous state of axis
+ 						if(ev.jaxis.value <  -1*T_AXIS && !(x & 0x01))		lastjoy = axisfirst;
+ 						if(ev.jaxis.value >     T_AXIS && !(x & 0x02))		lastjoy = axisfirst + 1;
+-						//if(lastjoy) fprintf(stderr, "SDL_JOYAXISMOTION - Joystick %i Axis %i = Position %i (Index %i)\n", i, ev.jaxis.axis, ev.jaxis.value, lastjoy);
+-
+-						// add key flag from event
+-						#ifdef ANDROID
++						//if(lastjoy) fprintf(stderr, "SDL_JOYAXISMOTION - Joystick %i Axis %i = Position %i (Index %i)\n", i, ev.jaxis.axis, ev.jaxis.value, lastjoy);
++
++						// add key flag from event
++						#ifdef ANDROID
+                         if(ev.jaxis.value < -1*T_AXIS)  { joysticks[i].Axes |= 0x01 << (ev.jaxis.axis*2); }
+-                        if(ev.jaxis.value >    T_AXIS)  { joysticks[i].Axes |= 0x02 << (ev.jaxis.axis*2); }
++                        if(ev.jaxis.value >    T_AXIS)  { joysticks[i].Axes |= 0x02 << (ev.jaxis.axis*2); }
+                         #endif
+ 					}
+ 				}
+-				break;
+-
+-            // PLUG AND PLAY
+-            case SDL_JOYDEVICEADDED:
+-                if (ev.jdevice.which < JOY_LIST_TOTAL)
+-                {
+-                    int i = ev.jdevice.which;
+-                    char buffer[MAX_BUFFER_LEN];
+-                    char joy_name[MAX_BUFFER_LEN];
+-                    open_joystick(i);
+-                    //get_time_string(buffer, MAX_BUFFER_LEN, (time_t)ev.jdevice.timestamp, TIMESTAMP_PATTERN);
+-                    get_now_string(buffer, MAX_BUFFER_LEN, TIMESTAMP_PATTERN);
+-                    numjoy = SDL_NumJoysticks();
+-                    strcpy(joy_name,get_joystick_name(joysticks[i].Name));
+-                    printf("Joystick: \"%s\" connected at port: %d at %s\n",joy_name,i,buffer);
+-                }
+-                break;
+-
+-            case SDL_JOYDEVICEREMOVED:
+-                if (ev.jdevice.which < JOY_LIST_TOTAL)
+-                {
+-                    int i = ev.jdevice.which;
+-                    if(joystick[i])
+-                    {
+-                        char buffer[MAX_BUFFER_LEN];
+-                        char joy_name[MAX_BUFFER_LEN];
+-                        get_now_string(buffer, MAX_BUFFER_LEN, TIMESTAMP_PATTERN);
+-                        close_joystick(i);
+-                        numjoy = SDL_NumJoysticks();
+-                        strcpy(joy_name,get_joystick_name(joysticks[i].Name));
+-                        printf("Joystick: \"%s\" disconnected from port: %d at %s\n",joy_name,i,buffer);
+-                    }
+-                }
+-                break;
+-
+-            default:
++				break;
++				*/
++            // PLUG AND PLAY
++            /*
++            case SDL_JOYDEVICEADDED:
++                if (ev.jdevice.which < JOY_LIST_TOTAL)
++                {
++                    
++					int i = ev.jdevice.which;
++                    char buffer[MAX_BUFFER_LEN];
++                    char joy_name[MAX_BUFFER_LEN];
++                    //open_joystick(i);
++                    //get_time_string(buffer, MAX_BUFFER_LEN, (time_t)ev.jdevice.timestamp, TIMESTAMP_PATTERN);
++                    //get_now_string(buffer, MAX_BUFFER_LEN, TIMESTAMP_PATTERN);
++                    //numjoy = SDL_NumJoysticks();
++                    //strcpy(joy_name,get_joystick_name(joysticks[i].Name));
++                    //printf("Joystick: \"%s\" connected at port: %d at %s\n",joy_name,i,buffer);
++					
++                }
++                break;
++	    */
++            case SDL_JOYDEVICEREMOVED:
++                if (ev.jdevice.which < JOY_LIST_TOTAL)
++                {
++                    int i = ev.jdevice.which;
++                    if(joystick[i])
++                    {
++                        char buffer[MAX_BUFFER_LEN];
++                        char joy_name[MAX_BUFFER_LEN];
++                        get_now_string(buffer, MAX_BUFFER_LEN, TIMESTAMP_PATTERN);
++                        //close_joystick(i);
++                        numjoy = SDL_NumJoysticks();
++                        strcpy(joy_name,get_joystick_name(joysticks[i].Name));
++                        printf("Joystick: \"%s\" disconnected from port: %d at %s\n",joy_name,i,buffer);
++                    }
++                }
++                break;
++
++            default:
+                 break;
+ 		}
+ 
+@@ -271,38 +288,62 @@ void getPads(Uint8* keystate, Uint8* keystate_def)
+ 
+ 	if(joysticks[0].Type != JOY_TYPE_GAMEPARK)
+ 	{
++		u32 oldButtons;
++		u32 oldAxes; //variable que almacena el antiguo valor del eje para determinar si hubo cambio
++		u32 oldHat; //variable que almacena el antiguo valor de la cruceta para determinar si hubo cambio
++		
+ 		// new PC joystick code - forget about SDL joystick events, just do a state check
+ 		SDL_JoystickUpdate();
+ 		for(i = 0; i < JOY_LIST_TOTAL; i++)
+ 		{
+ 			// reset state
+-			joysticks[i].Axes = joysticks[i].Hats = joysticks[i].Buttons = 0;
++			oldButtons = joysticks[i].Buttons; //Memorizamos el valor anterior, antes de reiniciarlo
++			oldAxes = joysticks[i].Axes; //Memorizamos el valor anterior, antes de reiniciarlo
++			oldHat = joysticks[i].Hats; //Memorizamos el valor anterior, antes de reiniciarlo
++			joysticks[i].Axes = joysticks[i].Hats = joysticks[i].Buttons = 0;
+ 			if (joystick[i] == NULL) continue;
+ 
+ 			// check buttons
+-			for(j = 0; j < joysticks[i].NumButtons; j++)
+-            {
+-                joysticks[i].Buttons |= SDL_JoystickGetButton(joystick[i], j) << j;
+-            }
++			for(j = 0; j < joysticks[i].NumButtons; j++)
++			{				
++				joysticks[i].Buttons |= SDL_JoystickGetButton(joystick[i], j) << j;
++				
++				//Nuevo sistema de detección de joystick durante la configuraciones de mandos del Openbor
++				if (SDL_JoystickGetButton(joystick[i], j) == 1 && (oldButtons & (0x01 << j)) == 0) { lastjoy = 1 + i * JOY_MAX_INPUTS + j; } //Si se ha presionado un botón, procedemos a cargarlo como la última interacción de un gamepad
++			}
+ 
+ 			// check axes
+ 			for(j = 0; j < joysticks[i].NumAxes; j++)
+-			{
++			{				
+ 				axis = SDL_JoystickGetAxis(joystick[i], j);
+-				if(axis < -1*T_AXIS)  { joysticks[i].Axes |= 0x01 << (j*2); }
+-				if(axis >    T_AXIS)  { joysticks[i].Axes |= 0x02 << (j*2); }
++				if(axis < -1*T_AXIS)  { joysticks[i].Axes |= 0x01 << (j*2);}
++				if(axis >    T_AXIS)  { joysticks[i].Axes |= 0x02 << (j*2);}
++				
++				//Nuevo sistema de detección de joystick durante la configuraciones de mandos del Openbor
++				int axisfirst = 1 + i * JOY_MAX_INPUTS + joysticks[i].NumButtons + 2 * j; //Optenemos el número de eje en el indice de Openbor
++				int axisNeg = oldAxes & (0x01 << (j*2));
++				int axisPos = oldAxes & (0x02 << (j*2));
++				if(axis < -1*T_AXIS && axisNeg == 0)  { lastjoy = axisfirst; }
++				if(axis >    T_AXIS && axisPos == 0)  { lastjoy = axisfirst + 1; }
+ 			}
+ 
+ 			// check hats
+-			for(j = 0; j < joysticks[i].NumHats; j++)
+-            {
+-                //joysticks[i].Hats |= SDL_JoystickGetHat(joystick[i], j) << (j*4);
+-
+-                Uint8 hat_value = SDL_JoystickGetHat(joystick[i], j);
+-                if(hat_value & SDL_HAT_UP)      joysticks[i].Hats |= SDL_HAT_UP     << (j*4);
+-                if(hat_value & SDL_HAT_RIGHT)   joysticks[i].Hats |= SDL_HAT_RIGHT  << (j*4);
+-                if(hat_value & SDL_HAT_DOWN)    joysticks[i].Hats |= SDL_HAT_DOWN   << (j*4);
+-                if(hat_value & SDL_HAT_LEFT)    joysticks[i].Hats |= SDL_HAT_LEFT   << (j*4);
++			for(j = 0; j < joysticks[i].NumHats; j++)
++            {
++                //joysticks[i].Hats |= SDL_JoystickGetHat(joystick[i], j) << (j*4);				
++                Uint8 hat_value = SDL_JoystickGetHat(joystick[i], j);
++                if(hat_value & SDL_HAT_UP)      joysticks[i].Hats |= SDL_HAT_UP     << (j*4);
++                if(hat_value & SDL_HAT_RIGHT)   joysticks[i].Hats |= SDL_HAT_RIGHT  << (j*4);
++                if(hat_value & SDL_HAT_DOWN)    joysticks[i].Hats |= SDL_HAT_DOWN   << (j*4);
++                if(hat_value & SDL_HAT_LEFT)    joysticks[i].Hats |= SDL_HAT_LEFT   << (j*4);
++				
++				//Nuevo sistema de detección de joystick durante la configuraciones de mandos del Openbor
++				
++				if((hat_value & SDL_HAT_UP) && (oldHat & SDL_HAT_UP) == 0) {lastjoy = 1 + i * JOY_MAX_INPUTS + joysticks[i].NumButtons + 2 * joysticks[i].NumAxes + 0; }
++				if((hat_value & SDL_HAT_RIGHT) && (oldHat & SDL_HAT_RIGHT) == 0) {lastjoy = 1 + i * JOY_MAX_INPUTS + joysticks[i].NumButtons + 2 * joysticks[i].NumAxes + 1; }
++				if((hat_value & SDL_HAT_DOWN) && (oldHat & SDL_HAT_DOWN) == 0) {lastjoy = 1 + i * JOY_MAX_INPUTS + joysticks[i].NumButtons + 2 * joysticks[i].NumAxes + 2; }
++				if((hat_value & SDL_HAT_LEFT) && (oldHat & SDL_HAT_LEFT) == 0) {lastjoy = 1 + i * JOY_MAX_INPUTS + joysticks[i].NumButtons + 2 * joysticks[i].NumAxes + 3; }
++				
+             }
+ 
+ 			// combine axis, hat, and button state into a single value
+@@ -324,19 +365,19 @@ static int flag_to_index(u64 flag)
+ 	while(!((bit<<index)&flag) && index<JOY_MAX_INPUTS-1) ++index;
+ 	return index;
+ }
+-
+-char* get_joystick_name(const char* name)
+-{
+-    char lname[strlen(name)];
+-
+-    if (strlen(name) <= 0) return JOY_UNKNOWN_NAME;
+-    strcpy(lname,name);
+-    for(int i = 0; lname[i]; i++)
+-    {
+-        lname[i] = tolower(lname[i]);
+-    }
+-    if ( strstr(lname, "null") == NULL ) return JOY_UNKNOWN_NAME;
+-    return ( (char*)name );
++
++char* get_joystick_name(const char* name)
++{
++    char lname[strlen(name)];
++
++    if (strlen(name) <= 0) return JOY_UNKNOWN_NAME;
++    strcpy(lname,name);
++    for(int i = 0; lname[i]; i++)
++    {
++        lname[i] = tolower(lname[i]);
++    }
++    if ( strstr(lname, "null") == NULL ) return JOY_UNKNOWN_NAME;
++    return ( (char*)name );
+ }
+ 
+ /*
+@@ -345,14 +386,14 @@ types, defaults and keynames.
+ */
+ void joystick_scan(int scan)
+ {
+-	int i;
++	int i;
+ 
+-	if(!scan) return;
++	if(!scan) return;
+ 
+-	numjoy = SDL_NumJoysticks();
+-
+-	if (scan != 2)
+-    {
++	numjoy = SDL_NumJoysticks();
++
++	if (scan != 2)
++    {
+         if(numjoy <= 0)
+         {
+             printf("No Joystick(s) Found!\n");
+@@ -361,82 +402,86 @@ void joystick_scan(int scan)
+         else
+         {
+             printf("\n%d joystick(s) found!\n", numjoy);
+-        }
+-    }
+-
+-	if (numjoy > JOY_LIST_TOTAL) numjoy = JOY_LIST_TOTAL; // avoid overflow bug
++        }
++    }
++
++	if (numjoy > JOY_LIST_TOTAL) numjoy = JOY_LIST_TOTAL; // avoid overflow bug
+ 
+ 	for(i = 0; i < numjoy; i++)
+ 	{
+-        open_joystick(i);
+-
++        open_joystick(i);
++
+         if(scan != 2)
+-        {
++        {
+             // print JOY_MAX_INPUTS (32) spaces for alignment
+-            if(numjoy == 1)
+-            {
+-                printf("%s - %d axes, %d buttons, %d hat(s)\n",
+-                                    get_joystick_name(joysticks[i].Name), joysticks[i].NumAxes, joysticks[i].NumButtons, joysticks[i].NumHats);
+-            }
++            if(numjoy == 1)
++            {
++                //printf("%s - %d axes, %d buttons, %d hat(s)\n",
++                //                    get_joystick_name(joysticks[i].Name), joysticks[i].NumAxes, joysticks[i].NumButtons, joysticks[i].NumHats);
++				printf("%s - %d axes, %d buttons, %d hat(s)\n", joysticks[i].Name, joysticks[i].NumAxes, joysticks[i].NumButtons, joysticks[i].NumHats);
++			}
+             else if(numjoy > 1)
+             {
+                 if(i) printf("\n");
+-                printf("%d. %s - %d axes, %d buttons, %d hat(s)\n", i + 1,
+-                        get_joystick_name(joysticks[i].Name), joysticks[i].NumAxes, joysticks[i].NumButtons, joysticks[i].NumHats);
++                //printf("%d. %s - %d axes, %d buttons, %d hat(s)\n", i + 1,
++                //        get_joystick_name(joysticks[i].Name), joysticks[i].NumAxes, joysticks[i].NumButtons, joysticks[i].NumHats);
++				printf("%d. %s - %d axes, %d buttons, %d hat(s)\n", i + 1,joysticks[i].Name, joysticks[i].NumAxes, joysticks[i].NumButtons, joysticks[i].NumHats);
+             }
+         }
+ 	}
+ }
+-
+-/*
+-Open a single joystick
++
++/*
++Open a single joystick
+ */
+ void open_joystick(int i)
+-{
+-    int j;
++{
++    int j;
+ 
+-    if ( ( joystick[i] = SDL_JoystickOpen(i) ) == NULL )
+-    {
+-       printf("\nWarning: Unable to initialize joystick in port: %d! SDL Error: %s\n", i, SDL_GetError());
+-       return;
++    if ( ( joystick[i] = SDL_JoystickOpen(i) ) == NULL )
++    {
++       printf("\nWarning: Unable to initialize joystick in port: %d! SDL Error: %s\n", i, SDL_GetError());
++       return;
+     }
+     joysticks[i].NumHats = SDL_JoystickNumHats(joystick[i]);
+     joysticks[i].NumAxes = SDL_JoystickNumAxes(joystick[i]);
+     joysticks[i].NumButtons = SDL_JoystickNumButtons(joystick[i]);
+-
+-    strcpy(joysticks[i].Name, SDL_JoystickName(i));
+-
+-    joystick_haptic[i] = SDL_HapticOpenFromJoystick(joystick[i]);
+-    if (joystick_haptic[i] != NULL)
+-    {
+-        //Get initialize rumble
+-        if( SDL_HapticRumbleInit( joystick_haptic[i] ) < 0 )
+-        {
+-            printf("\nWarning: Unable to initialize rumble for joystick: %s in port: %d! SDL Error: %s\n", joysticks[i].Name, i, SDL_GetError());
+-        }
+-    }
++
++    //strcpy(joysticks[i].Name, SDL_JoystickName(i));
++	strcpy(joysticks[i].Name, SDL_JoystickNameForIndex(i));
++	//printf("%d - %s\n",i, SDL_JoystickNameForIndex(i));
++
++    joystick_haptic[i] = SDL_HapticOpenFromJoystick(joystick[i]);
++    if (joystick_haptic[i] != NULL)
++    {
++        //Get initialize rumble
++        if( SDL_HapticRumbleInit( joystick_haptic[i] ) < 0 )
++        {
++            printf("\nWarning: Unable to initialize rumble for joystick: %s in port: %d! SDL Error: %s\n", joysticks[i].Name, i, SDL_GetError());
++        }
++    }
+ 
+     #if GP2X
+     joysticks[i].Type = JOY_TYPE_GAMEPARK;
+     for(j = 0; j < JOY_MAX_INPUTS + 1; j++)
+     {
+-        if(j) joysticks[i].KeyName[j] = GameparkKeyName[j + i * JOY_MAX_INPUTS];
++        if(j) joysticks[i].KeyName[j] = GameparkKeyName[j + i * JOY_MAX_INPUTS];
+         else joysticks[i].KeyName[j] = GameparkKeyName[j];
+     }
+     #else
+     //SDL_JoystickEventState(SDL_IGNORE); // disable joystick events
+     for(j = 1; j < JOY_MAX_INPUTS + 1; j++)
+-    {
++    {
+         strcpy(joysticks[i].KeyName[j], PC_GetJoystickKeyName(i, j));
+     }
+-    #endif
+-
++    #endif
++
+     return;
+-}
+-
+-void reset_joystick_map(int i)
+-{
+-	memset(joysticks[i].Name,0,sizeof(joysticks[i].Name));
++}
++
++void reset_joystick_map(int i)
++{
++	memset(joysticks[i].Name,0,sizeof(joysticks[i].Name));
+ 	memset(joysticks[i].KeyName,0,sizeof(joysticks[i].KeyName));
+ 	joysticks[i].Type = 0;
+ 	joysticks[i].NumHats = 0;
+@@ -445,8 +490,8 @@ void reset_joystick_map(int i)
+ 	joysticks[i].Hats = 0;
+ 	joysticks[i].Axes = 0;
+ 	joysticks[i].Buttons = 0;
+-	joysticks[i].Data = 0;
+-    set_default_joystick_keynames(i);
++	joysticks[i].Data = 0;
++    set_default_joystick_keynames(i);
+ }
+ 
+ /*
+@@ -456,24 +501,24 @@ destroy all SDL Joystick data.
+ void control_exit()
+ {
+ 	int i;
+-	for(i = 0; i < numjoy; i++)
++	for(i = 0; i < numjoy; i++)
+     {
+ 		close_joystick(i);
+-	}
++	}
+ 	usejoy = 0;
+ }
+-
+-/*
+-Reset single joystick
++
++/*
++Reset single joystick
+ */
+ void close_joystick(int i)
+ {
+-	if(joystick[i] != NULL) SDL_JoystickClose(joystick[i]);
+-	if(joystick_haptic[i] != NULL) SDL_HapticClose(joystick_haptic[i]);
+-	joystick[i] = NULL;
+-	joystick_haptic[i] = NULL;
++	if(joystick[i] != NULL) SDL_JoystickClose(joystick[i]);
++	if(joystick_haptic[i] != NULL) SDL_HapticClose(joystick_haptic[i]);
++	joystick[i] = NULL;
++	joystick_haptic[i] = NULL;
+ 	reset_joystick_map(i);
+-}
++}
+ 
+ /*
+ Create default values for joysticks if enabled.
+@@ -481,41 +526,41 @@ Then scan for joysticks and update their data.
+ */
+ void control_init(int joy_enable)
+ {
+-	int i;
++	int i;
+ 
+ #ifdef GP2X
+ 	usejoy = joy_enable ? joy_enable : 1;
+ #else
+ 	usejoy = joy_enable;
+-#endif
++#endif
+ 
+ 	//memset(joysticks, 0, sizeof(s_joysticks) * JOY_LIST_TOTAL);
+ 	for(i = 0; i < JOY_LIST_TOTAL; i++)
+-	{
+-        joystick[i] = NULL;
+-        joystick_haptic[i] = NULL;
++	{
++        joystick[i] = NULL;
++        joystick_haptic[i] = NULL;
+ 		reset_joystick_map(i);
+ 	}
+-	joystick_scan(usejoy);
++	joystick_scan(usejoy);
+ 
+ #ifdef ANDROID
+-	for(i = 0; i < MAX_POINTERS; i++)
+-    {
+-        touch_info.pstatus[i] = TOUCH_STATUS_UP;
++	for(i = 0; i < MAX_POINTERS; i++)
++    {
++        touch_info.pstatus[i] = TOUCH_STATUS_UP;
+     }
+ #endif
+-}
+-
+-void set_default_joystick_keynames(int i)
+-{
+-    int j;
++}
++
++void set_default_joystick_keynames(int i)
++{
++    int j;
+     for(j = 0; j < JOY_MAX_INPUTS + 1; j++)
+-    {
+-        if(j) strcpy(joysticks[i].KeyName[j], JoystickKeyName[j + i * JOY_MAX_INPUTS]);
++    {
++        if(j) strcpy(joysticks[i].KeyName[j], JoystickKeyName[j + i * JOY_MAX_INPUTS]);
+         else  strcpy(joysticks[i].KeyName[j], JoystickKeyName[j]);
+-    }
++    }
+ }
+-
++
+ char *control_getkeyname(unsigned int keycode)
+ {
+ 	int i;
+@@ -523,7 +568,7 @@ char *control_getkeyname(unsigned int keycode)
+ 	{
+ 		if((keycode >= (JOY_LIST_FIRST + 1 + (i * JOY_MAX_INPUTS))) && (keycode <= JOY_LIST_FIRST + JOY_MAX_INPUTS + (i * JOY_MAX_INPUTS)))
+ 			return (char*)joysticks[i].KeyName[keycode - (JOY_LIST_FIRST + (i * JOY_MAX_INPUTS))];
+-	}
++	}
+ 
+ 	if(keycode > SDLK_FIRST && keycode < SDLK_LAST)
+ 		return JOY_GetKeyName(keycode);
+@@ -539,12 +584,12 @@ int control_usejoy(int enable)
+ {
+ 	usejoy = enable;
+ 	return 0;
+-}
+-
+-#if ANDROID
+-/*
+-Get if touchscreen vibration is active
+-*/
++}
++
++#if ANDROID
++/*
++Get if touchscreen vibration is active
++*/
+ int is_touchpad_vibration_enabled()
+ {
+ 	return savedata.is_touchpad_vibration_enabled;
+@@ -583,9 +628,9 @@ void control_update_android_touch(TouchStatus *touch_info, int maxp, Uint8* keys
+ 	int i, j;
+ 	float tx, ty, tr;
+ 	float r[MAXTOUCHB];
+-	float dirx, diry, circlea, circleb, tan;
++	float dirx, diry, circlea, circleb, tan;
+ 
+-	memset(touchstates, 0, sizeof(touchstates));
++	memset(touchstates, 0, sizeof(touchstates));
+ 
+ 	for(j=0; j<MAXTOUCHB; j++)
+ 	{
+@@ -611,60 +656,60 @@ void control_update_android_touch(TouchStatus *touch_info, int maxp, Uint8* keys
+ 			if(tx<0)
+ 			{
+ 				tan = ty/tx;
+-				if(tan>=-tana && tan<=tana)
++				if(tan>=-tana && tan<=tana)
+                 {
+ 					touchstates[SDID_MOVELEFT] = 1;
+-				}
+-				else if(tan<-tanb)
++				}
++				else if(tan<-tanb)
+                 {
+ 					touchstates[SDID_MOVEDOWN] = 1;
+-				}
+-				else if(tan>tanb)
++				}
++				else if(tan>tanb)
+ 				{
+ 					touchstates[SDID_MOVEUP] = 1;
+-				}
+-				else if(ty<0)
++				}
++				else if(ty<0)
+ 				{
+ 					touchstates[SDID_MOVEUP] = touchstates[SDID_MOVELEFT] = 1;
+-				}
+-				else
++				}
++				else
+ 				{
+-					touchstates[SDID_MOVELEFT] = touchstates[SDID_MOVEDOWN] = 1;
++					touchstates[SDID_MOVELEFT] = touchstates[SDID_MOVEDOWN] = 1;
+                 }
+ 			}
+ 			else if(tx>0)
+ 			{
+ 				tan = ty/tx;
+-				if(tan>=-tana && tan<=tana)
++				if(tan>=-tana && tan<=tana)
+                 {
+ 					touchstates[SDID_MOVERIGHT] = 1;
+-				}
+-				else if(tan<-tanb)
++				}
++				else if(tan<-tanb)
+ 				{
+ 					touchstates[SDID_MOVEUP] = 1;
+-				}
+-				else if(tan>tanb)
++				}
++				else if(tan>tanb)
+                 {
+ 					touchstates[SDID_MOVEDOWN] = 1;
+-				}
+-				else if(ty<0)
++				}
++				else if(ty<0)
+                 {
+ 					touchstates[SDID_MOVEUP] = touchstates[SDID_MOVERIGHT] = 1;
+-				}
+-				else
++				}
++				else
+                 {
+-					touchstates[SDID_MOVERIGHT] = touchstates[SDID_MOVEDOWN] = 1;
++					touchstates[SDID_MOVERIGHT] = touchstates[SDID_MOVEDOWN] = 1;
+                 }
+ 			}
+ 			else
+ 			{
+-				if(ty>0)
+-				{
++				if(ty>0)
++				{
+                     touchstates[SDID_MOVEDOWN] = 1;
+-				}
+-				else
+-				{
+-				    touchstates[SDID_MOVEUP] = 1;
++				}
++				else
++				{
++				    touchstates[SDID_MOVEUP] = 1;
+                 }
+ 			}
+ 		}
+@@ -677,35 +722,35 @@ void control_update_android_touch(TouchStatus *touch_info, int maxp, Uint8* keys
+ 			tx = touch_info->px[i]-bx[j];
+ 			ty = touch_info->py[i]-by[j];
+ 			tr = tx*tx + ty*ty;
+-			if(tr<=r[j])
+-            {
+-                touchstates[j] = 1;
++			if(tr<=r[j])
++            {
++                touchstates[j] = 1;
+             }
+ 		}
+-	}
+-	#undef tana
+-	#undef tanb
++	}
++	#undef tana
++	#undef tanb
+ 
+-	hide_t = timer_gettick() + 5000;
++	hide_t = timer_gettick() + 5000;
+ 
+ 	//map to current user settings
+ 	extern s_savedata savedata;
+ 	#define pc(x) savedata.keys[0][x]
+-	keystate[pc(SDID_MOVEUP)] = touchstates[SDID_MOVEUP];
+-	keystate[pc(SDID_MOVEDOWN)] = touchstates[SDID_MOVEDOWN];
++	keystate[pc(SDID_MOVEUP)] = touchstates[SDID_MOVEUP];
++	keystate[pc(SDID_MOVEDOWN)] = touchstates[SDID_MOVEDOWN];
+ 	keystate[pc(SDID_MOVELEFT)] = touchstates[SDID_MOVELEFT];
+ 	keystate[pc(SDID_MOVERIGHT)] = touchstates[SDID_MOVERIGHT];
+ 	keystate[pc(SDID_ATTACK)] = touchstates[SDID_ATTACK];
+-	keystate[pc(SDID_ATTACK2)] = touchstates[SDID_ATTACK2];
++	keystate[pc(SDID_ATTACK2)] = touchstates[SDID_ATTACK2];
+ 	keystate[pc(SDID_ATTACK3)] = touchstates[SDID_ATTACK3];
+-	keystate[pc(SDID_ATTACK4)] = touchstates[SDID_ATTACK4];
++	keystate[pc(SDID_ATTACK4)] = touchstates[SDID_ATTACK4];
+ 	keystate[pc(SDID_JUMP)] = touchstates[SDID_JUMP];
+ 	keystate[pc(SDID_SPECIAL)] = touchstates[SDID_SPECIAL];
+ 	keystate[pc(SDID_START)] = touchstates[SDID_START];
+-	keystate[pc(SDID_SCREENSHOT)] = touchstates[SDID_SCREENSHOT];
+-	#undef pc
+-
+-	//use default value for touch key mapping
++	keystate[pc(SDID_SCREENSHOT)] = touchstates[SDID_SCREENSHOT];
++	#undef pc
++
++	//use default value for touch key mapping
+     keystate_def[default_keys[SDID_MOVEUP]]    = touchstates[SDID_MOVEUP];
+     keystate_def[default_keys[SDID_MOVEDOWN]]  = touchstates[SDID_MOVEDOWN];
+     keystate_def[default_keys[SDID_MOVELEFT]]  = touchstates[SDID_MOVELEFT];
+@@ -717,19 +762,19 @@ void control_update_android_touch(TouchStatus *touch_info, int maxp, Uint8* keys
+     keystate_def[default_keys[SDID_JUMP]]      = touchstates[SDID_JUMP];
+     keystate_def[default_keys[SDID_SPECIAL]]   = touchstates[SDID_SPECIAL];
+     keystate_def[default_keys[SDID_START]]     = touchstates[SDID_START];
+-    keystate_def[default_keys[SDID_SCREENSHOT]] = touchstates[SDID_SCREENSHOT];
+-
+-    keystate[CONTROL_ESC] = keystate_def[CONTROL_ESC] = touchstates[SDID_ESC];
+-
++    keystate_def[default_keys[SDID_SCREENSHOT]] = touchstates[SDID_SCREENSHOT];
++
++    keystate[CONTROL_ESC] = keystate_def[CONTROL_ESC] = touchstates[SDID_ESC];
++
+     return;
+-}
+-
++}
++
+ int is_touch_area(float x, float y)
+ {
+ 	int j;
+ 	float tx, ty, tr;
+ 	float r[MAXTOUCHB];
+-	float dirx, diry, circlea, circleb, tan;
++	float dirx, diry, circlea, circleb, tan;
+ 
+ 	for(j=0; j<MAXTOUCHB; j++)
+ 	{
+@@ -752,60 +797,60 @@ int is_touch_area(float x, float y)
+         if(tx<0)
+         {
+             tan = ty/tx;
+-            if(tan>=-tana && tan<=tana)
++            if(tan>=-tana && tan<=tana)
+             {
+                 return 1;
+-            }
+-            else if(tan<-tanb)
++            }
++            else if(tan<-tanb)
+             {
+                 return 1;
+-            }
+-            else if(tan>tanb)
++            }
++            else if(tan>tanb)
+             {
+                 return 1;
+-            }
+-            else if(ty<0)
++            }
++            else if(ty<0)
+             {
+                 return 1;
+-            }
+-            else
++            }
++            else
+             {
+-                return 1;
++                return 1;
+             }
+         }
+         else if(tx>0)
+         {
+             tan = ty/tx;
+-            if(tan>=-tana && tan<=tana)
++            if(tan>=-tana && tan<=tana)
+             {
+                 return 1;
+-            }
+-            else if(tan<-tanb)
++            }
++            else if(tan<-tanb)
+             {
+                 return 1;
+-            }
+-            else if(tan>tanb)
++            }
++            else if(tan>tanb)
+             {
+                 return 1;
+-            }
+-            else if(ty<0)
++            }
++            else if(ty<0)
+             {
+                 return 1;
+-            }
+-            else
++            }
++            else
+             {
+-                return 1;
++                return 1;
+             }
+         }
+         else
+         {
+-            if(ty>0)
+-            {
++            if(ty>0)
++            {
++                return 1;
++            }
++            else
++            {
+                 return 1;
+-            }
+-            else
+-            {
+-                return 1;
+             }
+         }
+     }
+@@ -818,23 +863,23 @@ int is_touch_area(float x, float y)
+         tx = x-bx[j];
+         ty = y-by[j];
+         tr = tx*tx + ty*ty;
+-        if(tr<=r[j])
+-        {
+-            return 1;
++        if(tr<=r[j])
++        {
++            return 1;
+         }
+-    }
+-	#undef tana
+-	#undef tanb
+-
+-	return 0;
++    }
++	#undef tana
++	#undef tanb
++
++	return 0;
+ }
+ #endif
+ 
+ int keyboard_getlastkey()
+ {
+-		int i, ret = lastkey;
++		int ret = lastkey;
+ 		lastkey = 0;
+-		for(i = 0; i < JOY_LIST_TOTAL; i++) joysticks[i].Buttons = 0;
++		//for(i = 0; i < JOY_LIST_TOTAL; i++) joysticks[i].Buttons = 0;
+ 		return ret;
+ }
+ 
+@@ -869,7 +914,7 @@ int control_scankey()
+ 	}
+ 	ready = (!k || !j);
+ 	return 0;
+-}
++}
+ 
+ void control_update(s_playercontrols ** playercontrols, int numplayers)
+ {
+@@ -878,10 +923,10 @@ void control_update(s_playercontrols ** playercontrols, int numplayers)
+ 	int player;
+ 	int t;
+ 	s_playercontrols * pcontrols;
+-	Uint8* keystate = (Uint8*)SDL_GetKeyState(NULL); // Here retrieve keyboard state
+-	Uint8* keystate_def = (Uint8*)SDL_GetKeyState(NULL); // Here retrieve keyboard state for default
++	Uint8* keystate = (Uint8*)SDL_GetKeyState(NULL); // Here retrieve keyboard state
++	Uint8* keystate_def = (Uint8*)SDL_GetKeyState(NULL); // Here retrieve keyboard state for default
+ 
+-	getPads(keystate,keystate_def);
++	getPads(keystate,keystate_def);
+ 
+ 	for(player = 0; player < numplayers; player++){
+ 
+@@ -892,22 +937,22 @@ void control_update(s_playercontrols ** playercontrols, int numplayers)
+ 		for(i = 0; i < JOY_MAX_INPUTS; i++)
+ 		{
+ 			t = pcontrols->settings[i];
+-			if(t >= SDLK_FIRST && t < SDLK_LAST){
++			if(t >= SDLK_FIRST && t < SDLK_LAST){
+                 if(keystate[t]) k |= (1<<i);
+ 			}
+-		}
+-
+-        //White Dragon: Set input from default keys overriding previous keys
+-        //Default keys are available just if no configured keys are pressed!
+-        if (player <= 0 && !k)
+-        {
++		}
++
++        //White Dragon: Set input from default keys overriding previous keys
++        //Default keys are available just if no configured keys are pressed!
++        if (player == 0 && !k)
++        {
+             for(i = 0; i < JOY_MAX_INPUTS; i++)
+             {
+                 t = default_control.settings[i];
+-                if(t >= SDLK_FIRST && t < SDLK_LAST){
++                if(t >= SDLK_FIRST && t < SDLK_LAST){
+                     if(keystate_def[t]) k |= (1<<i);
+                 }
+-            }
++            }
+         }
+ 
+ 		if(usejoy)
+@@ -928,21 +973,21 @@ void control_update(s_playercontrols ** playercontrols, int numplayers)
+ 		}
+ 		pcontrols->kb_break = 0;
+ 		pcontrols->newkeyflags = k & (~pcontrols->keyflags);
+-		pcontrols->keyflags = k;
+-
++		pcontrols->keyflags = k;
++
+ 		//if (player <= 0) debug_printf("hats: %d, axes: %d, data: %d",joysticks[0].Hats,joysticks[0].Axes,joysticks[0].Data);
+ 	}
+ }
+ 
+ void control_rumble(int port, int ratio, int msec)
+-{
+-    #if SDL
+-    if (joystick[port] != NULL && joystick_haptic[port] != NULL) {
+-        if(SDL_HapticRumblePlay(joystick_haptic[port], ratio, msec) != 0)
+-        {
+-            //printf( "Warning: Unable to play rumble! %s\n", SDL_GetError() );
+-        }
+-    }
++{
++    #if SDL
++    if (joystick[port] != NULL && joystick_haptic[port] != NULL) {
++        if(SDL_HapticRumblePlay(joystick_haptic[port], ratio, msec) != 0)
++        {
++            //printf( "Warning: Unable to play rumble! %s\n", SDL_GetError() );
++        }
++    }
+     #endif
+ }
+ 
+diff --git a/engine/source/openborscript/config.h b/engine/source/openborscript/config.h
+index b056148c..ce67d918 100644
+--- a/engine/source/openborscript/config.h
++++ b/engine/source/openborscript/config.h
+@@ -11,11 +11,11 @@
+ 
+ #include "Interpreter.h"
+ #include "pp_parser.h"
+-
+-#include "axis.h"
+-#include "binding.h"
+-#include "energy_status.h"
+-#include "entity.h"
++
++#include "axis.h"
++#include "binding.h"
++#include "energy_status.h"
++#include "entity.h"
+ 
+ #define MAX_GLOBAL_VAR 2048
+ #define MAX_KEY_LEN    24
+@@ -23,8 +23,8 @@
+ //osc
+ #define script_magic ((int)0x73636f)
+ //vlst
+-#define varlist_magic ((int)0x74736c76)
+-
++#define varlist_magic ((int)0x74736c76)
++
+ 
+ 
+ typedef enum
+@@ -185,7 +185,7 @@ HRESULT openbor_unloadsample(ScriptVariant **varlist , ScriptVariant **pretvar,
+ HRESULT openbor_fadeout(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
+ HRESULT openbor_playerkeys(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
+ HRESULT openbor_changepalette(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
+-HRESULT openbor_damageentity(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
++HRESULT openbor_damageentity(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
+ HRESULT openbor_getcomputeddamage(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
+ HRESULT openbor_killentity(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
+ HRESULT openbor_dograb(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
+@@ -218,7 +218,7 @@ HRESULT openbor_checkplatformbelow(ScriptVariant **varlist , ScriptVariant **pre
+ HRESULT openbor_checkplatformabove(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
+ HRESULT openbor_checkplatformbetween(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
+ HRESULT openbor_checkbasemap(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
+-HRESULT openbor_checkbasemapindex(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
++HRESULT openbor_checkbasemapindex(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
+ HRESULT openbor_checkbase(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
+ HRESULT openbor_generatebasemap(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
+ 
+@@ -310,14 +310,14 @@ HRESULT openbor_compilescript(ScriptVariant **varlist , ScriptVariant **pretvar,
+ HRESULT openbor_executescript(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
+ 
+ HRESULT openbor_loadgamefile(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
+-HRESULT openbor_finishlevel(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
++HRESULT openbor_finishlevel(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
+ HRESULT openbor_gameover(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
+ HRESULT openbor_gotomainmenu(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
+ HRESULT openbor_playgame(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
+ HRESULT openbor_getrecordingstatus(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
+ HRESULT openbor_recordinputs(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
+-HRESULT openbor_getsaveinfo(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
+-
++HRESULT openbor_getsaveinfo(ScriptVariant **varlist , ScriptVariant **pretvar, int paramCount);
++
+ int mapstrings_animationproperty(ScriptVariant **varlist, int paramCount);
+ int mapstrings_systemvariant(ScriptVariant **varlist, int paramCount);
+ int mapstrings_entityproperty(ScriptVariant **varlist, int paramCount);
+@@ -332,12 +332,12 @@ int mapstrings_gfxproperty(ScriptVariant **varlist, int paramCount);
+ int mapstrings_levelproperty(ScriptVariant **varlist, int paramCount);
+ 
+ int mapstrings_attackproperty(ScriptVariant **varlist, int paramCount);
+-
++
+ 
+ enum systemvariant_enum
+ {
+     _sv_background,
+-    _sv_blockade,
++    _sv_blockade,
+     _sv_bossescount,
+     _sv_branchname,
+     _sv_cheats,
+@@ -410,7 +410,7 @@ enum systemvariant_enum
+     _sv_nosave,
+     _sv_noscreenshot,
+     _sv_noshowcomplete,
+-    _sv_numbasemaps,
++    _sv_numbasemaps,
+     _sv_numbosses,
+     _sv_numholes,
+     _sv_numlayers,
+diff --git a/engine/source/utils.c b/engine/source/utils.c
+index 8a0dcfc7..99c1a5cc 100644
+--- a/engine/source/utils.c
++++ b/engine/source/utils.c
+@@ -468,7 +468,7 @@ int searchList(const char *list[], const char *value, int length)
+         {
+             high = mid-1;
+         }
+-
++	//printf("searchList: %s %s %d %d %d \n", list[mid], value, low, mid, high); //TAG_YO
+     }
+ 
+     return -1;
+diff --git a/engine/version.h b/engine/version.h
+index aa86d813..da241c1a 100644
+--- a/engine/version.h
++++ b/engine/version.h
+@@ -12,7 +12,7 @@
+ #define VERSION_NAME "OpenBOR"
+ #define VERSION_MAJOR "3"
+ #define VERSION_MINOR "0"
+-#define VERSION_BUILD ""
++#define VERSION_BUILD "6330 LNS v0.8"
+ #define VERSION "v"VERSION_MAJOR"."VERSION_MINOR" Build "VERSION_BUILD
+ 
+ #endif

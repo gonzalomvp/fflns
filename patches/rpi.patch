@@ -1,0 +1,110 @@
+diff --git a/engine/Makefile b/engine/Makefile
+index fbe14c1a..089bad28 100644
+--- a/engine/Makefile
++++ b/engine/Makefile
+@@ -139,21 +139,26 @@ TARGET_FINAL    = $(VERSION_NAME)
+ TARGET_PLATFORM = PANDORA
+ BUILD_LINUX     = 1
+ BUILD_SDL       = 1
++BUILD_GLES      = 1
++BUILD_OPENGL    = 1
++BUILD_LOADGL    = 1
++BUILD_WEBM      = 1
+ BUILD_GFX       = 1
+ BUILD_PTHREAD   = 1
+ BUILD_SDL_IO    = 1
+ BUILD_TREMOR    = 1
+ BUILDING        = 1
+-CC  	        = $(PNDDEV)/bin/arm-none-linux-gnueabi-gcc
++CC  	        = gcc
+ INCLUDES        = $(PNDDEV)/include \
+                   $(PNDDEV)/include/SDL
+ OBJTYPE         = elf
+-LIBRARIES       = $(PNDDEV)/lib
++LIBRARIES       = .
+ ifeq ($(BUILD_PANDORA), 0)
+ BUILD_DEBUG     = 1
+ endif
+ endif
+ 
++
+ ifdef BUILD_WII
+ TARGET 	        = $(VERSION_NAME).elf
+ TARGET_MAP      = $(TARGET).map
+@@ -199,7 +204,7 @@ ifdef BUILD_DARWIN
+ STRIP           = $(PREFIX)strip $(TARGET) -o $(TARGET_FINAL)
+ endif
+ ifdef BUILD_PANDORA
+-STRIP 	        = $(PNDDEV)/bin/arm-none-linux-gnueabi-strip $(TARGET) -o $(TARGET_FINAL)
++STRIP 	        = strip $(TARGET) -o $(TARGET_FINAL)
+ endif
+ ifdef BUILD_WII
+ STRIP           = elf2dol $< $@
+@@ -443,6 +448,7 @@ OBJS            = $(MAIN)
+ 
+ CFLAGS 	       += $(addprefix -I", $(addsuffix ", $(INCS))) $(ARCHFLAGS) -D$(TARGET_PLATFORM)
+ CFLAGS 	       += -g -Wall -Werror -fsigned-char -std=gnu99
++CFLAGS         += -marm -mfloat-abi=hard -fomit-frame-pointer -ffast-math -O2
+ 
+ 
+ ifndef BUILD_DARWIN
+@@ -568,7 +574,7 @@ ifdef BUILD_SDL
+ ifeq ($(findstring DGE, $(SDKPATH)), DGE)
+ LIBS           += -lSDL -lSDL_gfx -lts
+ else
+-LIBS           += -Wl,-rpath,$(LIBRARIES) -lSDL2 -lSDL2_gfx
++LIBS           += -Wl,-rpath,$(LIBRARIES) -lSDL2 -lSDL2_gfx -lGL
+ endif
+ endif
+ 
+diff --git a/engine/sdl/opengl.c b/engine/sdl/opengl.c
+index 94dd5209..6a308660 100644
+--- a/engine/sdl/opengl.c
++++ b/engine/sdl/opengl.c
+@@ -225,7 +225,8 @@ int video_gl_set_mode(s_videomodes videomodes)
+ 
+ 	// create an OpenGL compatibility context, not a core or ES context
+ #ifndef WIN // except on Windows, where some Nvidia drivers really don't like us doing this
+-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
++//	zanac, these attributes don't work well in allwinner (rasbperry too?)
++//	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
+ #endif
+ 
+ 	// get window and initialize OpenGL context
+@@ -235,8 +236,9 @@ int video_gl_set_mode(s_videomodes videomodes)
+ 		printf("Failed to create OpenGL-compatible window (%s)...", SDL_GetError());
+ 		goto error;
+ 	}
+-	if((context = SDL_GL_GetCurrentContext()))
+-		SDL_GL_DeleteContext(context);
++//	zanac, it seems that you should always create a new context without delete the old one, this happen in allwinner (rasbperry too?)
++//	if((context = SDL_GL_GetCurrentContext()))
++//		SDL_GL_DeleteContext(context);
+ 	context = SDL_GL_CreateContext(window);
+ 
+ 	// make sure the context was created successfully
+diff --git a/engine/sdl/sdlport.c b/engine/sdl/sdlport.c
+index a820fefc..0d4c7f7d 100644
+--- a/engine/sdl/sdlport.c
++++ b/engine/sdl/sdlport.c
+@@ -137,7 +137,19 @@ int main(int argc, char *argv[])
+ 	dirExists(logsDir, 1);
+ 	dirExists(screenShotsDir, 1);
+ 
+-	Menu();
++   // Test command line argument to launch MOD
++   int romArg = 0;
++   if(argc == 2) {
++      memcpy(packfile, argv[1], strlen(argv[1]));
++      if(fileExists(packfile)) {
++         romArg = 1;
++      }
++   }
++
++   if(!romArg) {
++       Menu();
++   }
++
+ #ifndef SKIP_CODE
+ 	getPakName(pakname, -1);
+ 	video_set_window_title(pakname);
