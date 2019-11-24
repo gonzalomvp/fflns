@@ -1,8 +1,8 @@
 diff --git a/engine/Makefile b/engine/Makefile
-index fbe14c1a..089bad28 100644
+index 60b57dcf..55601d8d 100644
 --- a/engine/Makefile
 +++ b/engine/Makefile
-@@ -139,21 +139,26 @@ TARGET_FINAL    = $(VERSION_NAME)
+@@ -134,21 +134,26 @@ TARGET_FINAL    = $(VERSION_NAME)
  TARGET_PLATFORM = PANDORA
  BUILD_LINUX     = 1
  BUILD_SDL       = 1
@@ -31,7 +31,7 @@ index fbe14c1a..089bad28 100644
  ifdef BUILD_WII
  TARGET 	        = $(VERSION_NAME).elf
  TARGET_MAP      = $(TARGET).map
-@@ -199,7 +204,7 @@ ifdef BUILD_DARWIN
+@@ -194,7 +199,7 @@ ifdef BUILD_DARWIN
  STRIP           = $(PREFIX)strip $(TARGET) -o $(TARGET_FINAL)
  endif
  ifdef BUILD_PANDORA
@@ -40,15 +40,15 @@ index fbe14c1a..089bad28 100644
  endif
  ifdef BUILD_WII
  STRIP           = elf2dol $< $@
-@@ -443,6 +448,7 @@ OBJS            = $(MAIN)
- 
- CFLAGS 	       += $(addprefix -I", $(addsuffix ", $(INCS))) $(ARCHFLAGS) -D$(TARGET_PLATFORM)
- CFLAGS 	       += -g -Wall -Werror -fsigned-char -std=gnu99
-+CFLAGS         += -marm -mfloat-abi=hard -fomit-frame-pointer -ffast-math -O2
- 
+@@ -440,6 +445,7 @@ CFLAGS 	       += $(addprefix -I", $(addsuffix ", $(INCS))) $(ARCHFLAGS) -D$(TAR
+ #CFLAGS 	       += -g -Wall -Werror -fsigned-char -std=gnu99
+ #-Wno-unused-variable
+ CFLAGS 	       += -g -Wall -fsigned-char -std=gnu99 
++CFLAGS 	       += -marm -mfloat-abi=hard -fomit-frame-pointer -ffast-math -O2
  
  ifndef BUILD_DARWIN
-@@ -568,7 +574,7 @@ ifdef BUILD_SDL
+ ifdef BUILD_LINUX
+@@ -564,7 +570,7 @@ ifdef BUILD_SDL
  ifeq ($(findstring DGE, $(SDKPATH)), DGE)
  LIBS           += -lSDL -lSDL_gfx -lts
  else
@@ -58,7 +58,7 @@ index fbe14c1a..089bad28 100644
  endif
  
 diff --git a/engine/sdl/opengl.c b/engine/sdl/opengl.c
-index 94dd5209..6a308660 100644
+index 1db152fe..c8a54bd6 100644
 --- a/engine/sdl/opengl.c
 +++ b/engine/sdl/opengl.c
 @@ -225,7 +225,8 @@ int video_gl_set_mode(s_videomodes videomodes)
