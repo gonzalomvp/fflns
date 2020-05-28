@@ -94,7 +94,7 @@ index a820fefc..0d4c7f7d 100644
 -	Menu();
 +   // Test command line argument to launch MOD
 +   int romArg = 0;
-+   if(argc == 2) {
++   if(argc > 1) {
 +      memcpy(packfile, argv[1], strlen(argv[1]));
 +      if(fileExists(packfile)) {
 +         romArg = 1;
