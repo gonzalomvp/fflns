@@ -19,7 +19,7 @@ function depends_openbor-fflns() {
 }
 
 function sources_openbor-fflns() {
-    gitPullOrClone "$md_build" https://github.com/gonzalomvp/openbor v6330-fflns_v10d-rpi
+    gitPullOrClone "$md_build" https://github.com/gonzalomvp/openbor v6330-fflns
 }
 
 function build_openbor-fflns() {
