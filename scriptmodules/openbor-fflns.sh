@@ -24,9 +24,9 @@ function sources_openbor-fflns() {
 
 function build_openbor-fflns() {
     local params=()
-    ! isPlatform "x11" && params+=(BUILD_PANDORA=1)
+    ! isPlatform "x11" && params+=(BUILD_RASPBERRY=1)
     cd engine
-    make clean-all BUILD_PANDORA=1
+    make clean-all BUILD_RASPBERRY=1
     make "${params[@]}"
     md_ret_require="$md_build/engine/OpenBOR"
 }
